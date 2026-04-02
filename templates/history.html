@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Relay Manager · History</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-page="history">
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="/">LLM Relay Manager</a>
+        <nav class="nav">
+          <a href="/" data-nav="dashboard">Dashboard</a>
+          <a href="/stations" data-nav="stations">Stations</a>
+          <a href="/keys" data-nav="keys">Keys</a>
+          <a href="/models" data-nav="models">Models</a>
+          <a href="/history" data-nav="history">History</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="page-head">
+          <div>
+            <p class="eyebrow">History</p>
+            <h1>调度设置与巡检历史</h1>
+            <p class="lede small">这里负责后台自动探测开关，以及查看最近的模型检查历史。</p>
+          </div>
+        </section>
+
+        <section class="panel-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>调度设置</h2>
+                <p>开启后后台会自动执行“协议探测 + 模型检查”。</p>
+              </div>
+            </div>
+            <form id="scheduler-form" class="stack">
+              <label class="inline-check">
+                <input type="checkbox" name="enabled">
+                <span>启用后台调度</span>
+              </label>
+              <label>
+                <span>间隔分钟</span>
+                <input name="interval_minutes" type="number" min="1" max="1440" value="60">
+              </label>
+              <div class="actions">
+                <button type="submit" class="button primary">保存调度</button>
+                <button type="button" id="run-cycle-btn" class="button">立即跑一轮</button>
+              </div>
+            </form>
+            <div id="scheduler-status" class="scheduler-status"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>说明</h2>
+                <p>当前实现是进程内调度，适合本机工具，不是分布式任务系统。</p>
+              </div>
+            </div>
+            <ul class="plain-list">
+              <li>启用调度后，会周期性跑协议探测。</li>
+              <li>随后对已探测支持的协议下模型执行检查。</li>
+              <li>关闭调度不会中断当前已经在跑的周期。</li>
+            </ul>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>后台任务</h2>
+              <p>这里显示探测、审计、强制全量校验等长任务的进度和最终结果。</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>创建时间</th>
+                  <th>ID</th>
+                  <th>任务</th>
+                  <th>状态</th>
+                  <th>进度</th>
+                  <th>当前步骤</th>
+                  <th>错误</th>
+                </tr>
+              </thead>
+              <tbody id="jobs-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>最近历史</h2>
+              <p>最近 100 条模型检查记录。</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>模型</th>
+                  <th>站点</th>
+                  <th>Key</th>
+                  <th>协议</th>
+                  <th>状态</th>
+                  <th>可用</th>
+                  <th>线路</th>
+                  <th>延迟</th>
+                  <th>错误</th>
+                </tr>
+              </thead>
+              <tbody id="history-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>操作日志</h2>
+          </div>
+          <pre id="page-log" class="activity-log">等待操作...</pre>
+        </section>
+      </main>
+    </div>
+    <script src="/static/common.js"></script>
+    <script src="/static/history.js"></script>
+  </body>
+</html>

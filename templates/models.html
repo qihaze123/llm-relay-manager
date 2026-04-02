@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Relay Manager · Models</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-page="models">
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="/">LLM Relay Manager</a>
+        <nav class="nav">
+          <a href="/" data-nav="dashboard">Dashboard</a>
+          <a href="/stations" data-nav="stations">Stations</a>
+          <a href="/keys" data-nav="keys">Keys</a>
+          <a href="/models" data-nav="models">Models</a>
+          <a href="/history" data-nav="history">History</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="page-head">
+          <div>
+            <p class="eyebrow">Models</p>
+            <h1>按模型搜索当前在哪个协议和哪个 Key 下可用</h1>
+            <p class="lede small">这里展示的是“协议绑定”维度的模型能力，而不是简单的 Key 列表。</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>模型搜索</h2>
+              <p>常用字段改成下拉选择。文本输入只保留给模型名、预览和错误内容。</p>
+            </div>
+            <div id="models-search-summary" class="search-summary">等待搜索...</div>
+          </div>
+          <form id="search-form" class="stack">
+            <div class="filters-shell">
+              <section class="filter-group">
+                <div class="filter-group-head">
+                  <h3>主筛选</h3>
+                  <p>先收窄站点、Key、协议和状态。</p>
+                </div>
+                <div class="filter-grid primary">
+                  <label>
+                    <span>模型名</span>
+                    <input name="q" placeholder="例如 gpt-5.4 / qwen / glm">
+                  </label>
+                  <label>
+                    <span>站点</span>
+                    <select name="station_id" id="models-station-select">
+                      <option value="">全部站点</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Key</span>
+                    <select name="key_id" id="models-key-select">
+                      <option value="">全部 Key</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>协议</span>
+                    <select name="protocol_label" id="models-protocol-select">
+                      <option value="">全部协议</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>支持</span>
+                    <select name="supported">
+                      <option value="">全部</option>
+                      <option value="1">支持</option>
+                      <option value="0">不支持</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>状态</span>
+                    <select name="status">
+                      <option value="">全部</option>
+                      <option value="ok">ok</option>
+                      <option value="partial">partial</option>
+                      <option value="empty">empty</option>
+                      <option value="error">error</option>
+                      <option value="unchecked">unchecked</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>可用</span>
+                    <select name="available">
+                      <option value="">全部</option>
+                      <option value="1">可用</option>
+                      <option value="0">不可用</option>
+                      <option value="unchecked">未检查</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>排序字段</span>
+                    <select name="sort_by">
+                      <option value="model_id">模型</option>
+                      <option value="station_name">站点</option>
+                      <option value="key_name">Key</option>
+                      <option value="protocol_label">协议</option>
+                      <option value="supported">支持</option>
+                      <option value="status">状态</option>
+                      <option value="available">可用</option>
+                      <option value="history_success_rate">历史成功率</option>
+                      <option value="latency_ms">延迟</option>
+                      <option value="preview">预览</option>
+                      <option value="error">错误</option>
+                      <option value="checked_at">最近检查时间</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>排序方向</span>
+                    <select name="sort_dir">
+                      <option value="asc">升序</option>
+                      <option value="desc">降序</option>
+                    </select>
+                  </label>
+                </div>
+              </section>
+
+              <section class="filter-group">
+                <div class="filter-group-head">
+                  <h3>高级筛选</h3>
+                  <p>用于限制成功率、延迟和文本内容。</p>
+                </div>
+                <div class="filter-grid secondary">
+                  <label>
+                    <span>成功率下限</span>
+                    <input name="min_success_rate" type="number" min="0" max="100" step="0.1" placeholder="0-100">
+                  </label>
+                  <label>
+                    <span>成功率上限</span>
+                    <input name="max_success_rate" type="number" min="0" max="100" step="0.1" placeholder="0-100">
+                  </label>
+                  <label>
+                    <span>延迟下限 ms</span>
+                    <input name="min_latency_ms" type="number" min="0" step="1" placeholder="例如 500">
+                  </label>
+                  <label>
+                    <span>延迟上限 ms</span>
+                    <input name="max_latency_ms" type="number" min="0" step="1" placeholder="例如 5000">
+                  </label>
+                  <label>
+                    <span>预览包含</span>
+                    <input name="preview" placeholder="例如 ok / reasoning">
+                  </label>
+                  <label>
+                    <span>错误包含</span>
+                    <input name="error" placeholder="例如 timeout / rate limit">
+                  </label>
+                </div>
+              </section>
+            </div>
+
+            <div class="search-actions">
+              <label class="inline-check">
+                <input type="checkbox" name="available_only" value="1">
+                <span>仅显示可用</span>
+              </label>
+              <div class="actions">
+                <button type="submit" class="button primary">搜索</button>
+                <button type="button" id="reset-search-btn" class="button">重置</button>
+              </div>
+            </div>
+          </form>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th><button type="button" class="table-sort" data-sort="model_id">模型</button></th>
+                  <th><button type="button" class="table-sort" data-sort="station_name">站点</button></th>
+                  <th><button type="button" class="table-sort" data-sort="key_name">Key</button></th>
+                  <th><button type="button" class="table-sort" data-sort="protocol_label">协议</button></th>
+                  <th><button type="button" class="table-sort" data-sort="supported">支持</button></th>
+                  <th><button type="button" class="table-sort" data-sort="status">状态</button></th>
+                  <th><button type="button" class="table-sort" data-sort="available">可用</button></th>
+                  <th><button type="button" class="table-sort" data-sort="history_success_rate">历史成功率</button></th>
+                  <th><button type="button" class="table-sort" data-sort="latency_ms">延迟</button></th>
+                  <th><button type="button" class="table-sort" data-sort="preview">预览</button></th>
+                  <th><button type="button" class="table-sort" data-sort="error">错误</button></th>
+                </tr>
+              </thead>
+              <tbody id="search-results"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>操作日志</h2>
+          </div>
+          <pre id="page-log" class="activity-log">等待操作...</pre>
+        </section>
+      </main>
+    </div>
+    <script src="/static/common.js"></script>
+    <script src="/static/models.js"></script>
+  </body>
+</html>

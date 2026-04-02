@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Relay Manager · Stations</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-page="stations">
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="/">LLM Relay Manager</a>
+        <nav class="nav">
+          <a href="/" data-nav="dashboard">Dashboard</a>
+          <a href="/stations" data-nav="stations">Stations</a>
+          <a href="/keys" data-nav="keys">Keys</a>
+          <a href="/models" data-nav="models">Models</a>
+          <a href="/history" data-nav="history">History</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="page-head">
+          <div>
+            <p class="eyebrow">Stations</p>
+            <h1>站点工作台</h1>
+            <p class="lede small">先看中转站，再在站点下面展开 Key。新增、编辑全部改成弹框，主流程收敛到这一页。</p>
+          </div>
+          <div class="page-head-actions">
+            <button type="button" id="create-station-btn" class="button primary">新增站点</button>
+            <a href="/keys" class="button">高级 Key 运维</a>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-toolbar">
+            <div>
+              <h2>站点总览</h2>
+              <p class="panel-note">展开某个站点后，可以直接查看、添加和操作它下面的 Key。</p>
+            </div>
+            <div class="filters-bar">
+              <label>
+                <span>筛选</span>
+                <input id="station-search" placeholder="搜索站点名称或地址">
+              </label>
+              <label class="inline-check">
+                <input id="station-enabled-only" type="checkbox">
+                <span>只看启用</span>
+              </label>
+            </div>
+          </div>
+          <div id="stations-list" class="station-canvas"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>操作日志</h2>
+          </div>
+          <pre id="page-log" class="activity-log">等待操作...</pre>
+        </section>
+      </main>
+    </div>
+
+    <div id="station-modal" class="modal" hidden>
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="station-modal-title">
+        <div class="modal-head">
+          <div>
+            <h2 id="station-modal-title" data-modal-title>新增站点</h2>
+            <p data-modal-subtitle>录入一个中转站的基础信息和网络策略。</p>
+          </div>
+          <button type="button" class="button ghost modal-close" data-modal-close aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <form id="station-form" class="stack">
+            <input type="hidden" name="id">
+            <div class="modal-form-grid">
+              <label>
+                <span>名称</span>
+                <input name="name" placeholder="例如 daiju-live">
+              </label>
+              <label>
+                <span>Base URL</span>
+                <input name="base_url" placeholder="https://api.example.com">
+              </label>
+              <label>
+                <span>网络策略</span>
+                <select name="network_mode">
+                  <option value="auto">auto 自动</option>
+                  <option value="direct">direct 直连</option>
+                  <option value="proxy">proxy 代理</option>
+                </select>
+              </label>
+              <label>
+                <span>代理地址</span>
+                <input name="proxy_url" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7891">
+              </label>
+              <label class="full-span">
+                <span>备注</span>
+                <textarea name="notes" rows="4" placeholder="可选"></textarea>
+              </label>
+            </div>
+            <label class="inline-check">
+              <input type="checkbox" name="enabled" checked>
+              <span>启用这个站点</span>
+            </label>
+            <div id="station-form-feedback" class="form-feedback" hidden></div>
+            <div class="actions">
+              <button type="submit" class="button primary">保存站点</button>
+              <button type="button" class="button" data-modal-close>取消</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div id="key-modal" class="modal" hidden>
+      <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="key-modal-title">
+        <div class="modal-head">
+          <div>
+            <h2 id="key-modal-title" data-modal-title>新增 Key</h2>
+            <p data-modal-subtitle>把 Key 挂到当前站点下，保存后继续走协议探测和模型校验。</p>
+          </div>
+          <button type="button" class="button ghost modal-close" data-modal-close aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+          <form id="key-form" class="stack">
+            <input type="hidden" name="id">
+            <input type="hidden" name="station_id">
+            <div id="key-station-meta" class="modal-meta"></div>
+            <div class="modal-form-grid">
+              <label>
+                <span>名称</span>
+                <input name="name" placeholder="例如 main-vip-key">
+              </label>
+              <label>
+                <span>分组</span>
+                <input name="group_name" placeholder="例如 vip / default">
+              </label>
+              <label class="full-span">
+                <span>API Key</span>
+                <input name="api_key" placeholder="新增必填，编辑时留空表示不改">
+              </label>
+              <label>
+                <span>网络策略</span>
+                <select name="network_mode">
+                  <option value="">inherit 继承站点</option>
+                  <option value="auto">auto 自动</option>
+                  <option value="direct">direct 直连</option>
+                  <option value="proxy">proxy 代理</option>
+                </select>
+              </label>
+              <label>
+                <span>代理地址覆盖</span>
+                <input name="proxy_url" placeholder="可选。留空则继承站点代理地址。">
+              </label>
+              <label>
+                <span>超时秒数</span>
+                <input name="timeout_seconds" type="number" min="5" max="120" value="30">
+              </label>
+              <label>
+                <span>启用</span>
+                <select name="enabled_select">
+                  <option value="true">启用</option>
+                  <option value="false">停用</option>
+                </select>
+              </label>
+              <label class="full-span">
+                <span>种子模型</span>
+                <textarea name="seed_models" rows="4" placeholder="协议无法列模型时可手填，每行一个。"></textarea>
+              </label>
+              <label class="full-span">
+                <span>备注</span>
+                <textarea name="notes" rows="3" placeholder="可选"></textarea>
+              </label>
+            </div>
+            <input type="hidden" name="enabled" value="true">
+            <div id="key-form-feedback" class="form-feedback" hidden></div>
+            <div class="actions">
+              <button type="submit" class="button primary">保存 Key</button>
+              <button type="button" class="button" data-modal-close>取消</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/common.js"></script>
+    <script src="/static/stations.js"></script>
+  </body>
+</html>

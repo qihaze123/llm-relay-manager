@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LLM Relay Manager · Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-page="dashboard">
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="/">LLM Relay Manager</a>
+        <nav class="nav">
+          <a href="/" data-nav="dashboard">Dashboard</a>
+          <a href="/stations" data-nav="stations">Stations</a>
+          <a href="/keys" data-nav="keys">Keys</a>
+          <a href="/models" data-nav="models">Models</a>
+          <a href="/history" data-nav="history">History</a>
+        </nav>
+      </aside>
+      <main class="content">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">Overview</p>
+            <h1>先录入站点和 Key，再自动探测协议与模型。</h1>
+            <p class="lede">
+              这一版的流程以 Key 为中心：添加后自动探测支持的协议，然后再看每个协议下的模型与可用性。
+            </p>
+          </div>
+          <div class="hero-actions">
+            <button id="run-cycle-btn" class="button primary">跑完整探测周期</button>
+            <a class="button" href="/keys">去管理 Keys</a>
+          </div>
+        </section>
+
+        <section class="summary-grid" id="summary-grid"></section>
+
+        <section class="panel-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>协议概览</h2>
+                <p>当前系统支持的探测协议。</p>
+              </div>
+            </div>
+            <div class="chips">
+              <span class="chip">OpenAI Chat</span>
+              <span class="chip">OpenAI Responses</span>
+              <span class="chip">Claude / Anthropic Messages</span>
+              <span class="chip">Gemini GenerateContent</span>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <h2>调度状态</h2>
+                <p>后台自动探测开关和最近一次运行状态。</p>
+              </div>
+            </div>
+            <div id="scheduler-status" class="scheduler-status"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h2>最近历史</h2>
+              <p>最近 12 条模型检查记录。</p>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>模型</th>
+                  <th>站点</th>
+                  <th>Key</th>
+                  <th>协议</th>
+                  <th>状态</th>
+                  <th>可用</th>
+                  <th>延迟</th>
+                </tr>
+              </thead>
+              <tbody id="history-table"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>操作日志</h2>
+          </div>
+          <pre id="page-log" class="activity-log">等待操作...</pre>
+        </section>
+      </main>
+    </div>
+    <script src="/static/common.js"></script>
+    <script src="/static/dashboard.js"></script>
+  </body>
+</html>
