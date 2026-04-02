@@ -1,26 +1,26 @@
-# Security Policy
+# 安全说明
 
-## Current Security Model
+## 当前安全模型
 
-LLM Relay Manager is currently intended for local or restricted internal use.
+LLM Relay Manager 当前主要面向本地环境或受限的内部环境。
 
-Important limitations:
+当前需要特别注意的限制：
 
-- API keys are stored in plaintext in the local SQLite database
-- The application does not include authentication or role-based access control
-- The built-in web server is meant for lightweight local deployment
-- Background jobs and scheduler state are process-local
+- API Key 以明文形式存储在本地 SQLite 数据库中
+- 应用本身不包含登录认证和角色权限控制
+- 内置 Web 服务器只适合轻量本地部署
+- 后台任务和调度状态都是进程内的本地状态
 
-## Safe Usage Recommendations
+## 安全使用建议
 
-- Run the service only on trusted machines
-- Put it behind your own access control if remote access is required
-- Do not expose it directly to the public internet
-- Use non-production or scoped credentials whenever possible
-- Regularly rotate any keys managed by the tool
+- 只在受信任的机器上运行该服务
+- 如果需要远程访问，请自行放到受控访问层之后
+- 不要直接暴露到公网
+- 尽量使用低权限、受限范围或非生产密钥
+- 对通过本工具管理的密钥定期轮换
 
-## Reporting Issues
+## 安全问题反馈
 
-If you discover a security issue, please avoid opening a public issue with live secrets or exploit details.
+如果你发现安全问题，尽量不要直接在公开 issue 中附带真实密钥、敏感地址或可直接利用的细节。
 
-Open a private channel with the maintainer first, or remove sensitive details before reporting publicly.
+建议先通过私下渠道联系维护者，或者在公开反馈前先去掉敏感信息。

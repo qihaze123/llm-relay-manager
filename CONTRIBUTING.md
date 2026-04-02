@@ -1,26 +1,26 @@
-# Contributing
+# 贡献说明
 
-## Scope
+## 贡献范围
 
-This project currently values small, practical changes over broad refactors.
+当前项目更欢迎小而实用的改动，而不是大范围重构。
 
-Please keep contributions focused on:
+建议优先围绕这些方向提交改动：
 
-- bug fixes
-- protocol compatibility improvements
-- model discovery improvements
-- operator workflow polish
-- documentation fixes
+- Bug 修复
+- 协议兼容性改进
+- 模型发现能力改进
+- 运维使用流程优化
+- 文档修正
 
-## Development Notes
+## 开发说明
 
-- Keep the existing single-file backend structure unless there is a clear reason to change it
-- Reuse the current page and API patterns where possible
-- Avoid adding dependencies without a strong operational benefit
-- Keep changes easy to run locally with `python3 app.py`
+- 如果没有明确理由，尽量保持当前单文件后端结构
+- 尽量复用现有页面结构和 API 设计
+- 没有明显收益时，不要随意增加依赖
+- 保持改动可以直接通过 `python3 app.py` 在本地运行
 
-## Pull Requests
+## Pull Request 要求
 
-- Describe the problem and the behavior change clearly
-- Include manual verification steps
-- Mention any compatibility or security impact
+- 清楚描述问题和行为变化
+- 补充手工验证步骤
+- 说明兼容性或安全影响
