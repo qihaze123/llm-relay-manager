@@ -43,7 +43,7 @@
                 <input id="station-search" placeholder="搜索站点名称或地址">
               </label>
               <label class="inline-check">
-                <input id="station-enabled-only" type="checkbox">
+                <input id="station-enabled-only" type="checkbox" checked>
                 <span>只看启用</span>
               </label>
             </div>
@@ -93,11 +93,28 @@
                 <span>代理地址</span>
                 <input name="proxy_url" placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:7891">
               </label>
-              <label class="full-span">
-                <span>备注</span>
-                <textarea name="notes" rows="4" placeholder="可选"></textarea>
-              </label>
             </div>
+            <fieldset class="fieldset-throttle">
+              <legend>检测策略</legend>
+              <div class="modal-form-grid">
+                <label>
+                  <span>并发数</span>
+                  <input name="detect_max_concurrency" type="number" min="1" max="10" value="2">
+                </label>
+                <label>
+                  <span>最小间隔 (ms)</span>
+                  <input name="detect_min_interval_ms" type="number" min="0" max="30000" value="800">
+                </label>
+                <label>
+                  <span>限流冷却 (秒)</span>
+                  <input name="detect_cooldown_seconds" type="number" min="0" max="600" value="60">
+                </label>
+              </div>
+            </fieldset>
+            <label class="full-span">
+              <span>备注</span>
+              <textarea name="notes" rows="4" placeholder="可选"></textarea>
+            </label>
             <label class="inline-check">
               <input type="checkbox" name="enabled" checked>
               <span>启用这个站点</span>
@@ -179,6 +196,57 @@
               <button type="button" class="button" data-modal-close>取消</button>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+
+    <div id="binding-detail-modal" class="modal" hidden>
+      <div class="modal-dialog modal-dialog-wide" role="dialog" aria-modal="true" aria-labelledby="binding-detail-title">
+        <div class="modal-head modal-head-rich">
+          <div>
+            <p class="eyebrow modal-eyebrow">Protocol Detail</p>
+            <h2 id="binding-detail-title" data-modal-title>协议详情</h2>
+            <p id="binding-detail-subtitle" data-modal-subtitle>查看模型、状态、最近一次检查结果。</p>
+          </div>
+          <button type="button" class="button ghost modal-close" data-modal-close aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body binding-detail-shell">
+          <section class="binding-hero">
+            <div class="binding-hero-copy">
+              <div class="chip-row" id="binding-detail-meta"></div>
+              <p id="binding-detail-error" class="binding-detail-error" hidden></p>
+            </div>
+            <div class="binding-stats-grid" id="binding-detail-stats"></div>
+          </section>
+
+          <section class="binding-models-panel">
+            <div class="binding-models-head">
+              <div>
+                <h3>模型清单</h3>
+                <p>优先对单个模型做检查，避免一次性扫全量模型给中转站造成异常流量特征。</p>
+              </div>
+              <div class="binding-models-actions">
+                <button type="button" id="binding-detail-refresh" class="button">刷新详情</button>
+              </div>
+            </div>
+            <div class="binding-model-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>模型</th>
+                    <th>状态</th>
+                    <th>可用</th>
+                    <th>延迟</th>
+                    <th>最近检查</th>
+                    <th>摘要</th>
+                    <th>错误</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="binding-detail-models"></tbody>
+              </table>
+            </div>
+          </section>
         </div>
       </div>
     </div>

@@ -299,6 +299,49 @@ def curl_json(
     return status_code, parsed
 
 
+def curl_raw(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+    timeout_seconds: int = 30,
+    proxy_url: str | None = None,
+) -> tuple[int, str]:
+    cmd = [
+        "curl",
+        "-sS",
+        "-N",
+        "-L",
+        "--max-time",
+        str(timeout_seconds),
+        "-X",
+        method.upper(),
+        url,
+        "-H",
+        "User-Agent: llm-relay-manager/1.0",
+        "-w",
+        "\n__STATUS__:%{http_code}",
+    ]
+    if proxy_url:
+        cmd.extend(["--proxy", proxy_url])
+    else:
+        cmd.extend(["--noproxy", "*"])
+    for key, value in (headers or {}).items():
+        cmd.extend(["-H", f"{key}: {value}"])
+    if payload is not None:
+        cmd.extend(["-H", "Content-Type: application/json", "-d", json.dumps(payload, ensure_ascii=False)])
+
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds + 5)
+    if proc.returncode != 0:
+        raise RelayError(proc.stderr.strip() or "curl failed")
+    marker = "\n__STATUS__:"
+    if marker not in proc.stdout:
+        raise RelayError("missing HTTP status marker")
+    body, status_raw = proc.stdout.rsplit(marker, 1)
+    return int(status_raw.strip()), body.strip()
+
+
 def resolve_network_settings(key_record: dict[str, Any] | sqlite3.Row) -> dict[str, str]:
     key_mode = normalize_network_mode((key_record["network_mode"] if "network_mode" in key_record.keys() else ""), allow_inherit=True)
     station_mode = normalize_network_mode((key_record["station_network_mode"] if "station_network_mode" in key_record.keys() else "auto"))
@@ -374,6 +417,63 @@ def request_json_with_network(
     raise RelayError("network request failed without result")
 
 
+def request_text_with_network(
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+    timeout_seconds: int = 30,
+    network_mode: str = "auto",
+    proxy_url: str = "",
+) -> tuple[int, str, str]:
+    mode = normalize_network_mode(network_mode)
+    if mode == "proxy" and not proxy_url:
+        raise RelayError("proxy mode requires proxy_url")
+
+    routes = ["direct"]
+    if mode == "proxy":
+        routes = ["proxy"]
+    elif mode == "auto" and proxy_url:
+        routes = ["direct", "proxy"]
+
+    last_error: Exception | None = None
+    for index, route in enumerate(routes):
+        try:
+            status_code, body = curl_raw(
+                method,
+                url,
+                headers=headers,
+                payload=payload,
+                timeout_seconds=timeout_seconds,
+                proxy_url=proxy_url if route == "proxy" else None,
+            )
+            should_fallback = (
+                mode == "auto"
+                and route == "direct"
+                and proxy_url
+                and index + 1 < len(routes)
+                and status_code in TRANSIENT_HTTP_STATUS_CODES
+            )
+            if should_fallback:
+                continue
+            return status_code, body, route
+        except Exception as exc:
+            last_error = exc
+            should_fallback = (
+                mode == "auto"
+                and route == "direct"
+                and proxy_url
+                and index + 1 < len(routes)
+                and is_transient_error_text(str(exc))
+            )
+            if not should_fallback:
+                raise
+    if last_error:
+        raise last_error
+    raise RelayError("network request failed without result")
+
+
 class BaseAdapter:
     adapter_type = "base"
 
@@ -397,6 +497,24 @@ class BaseAdapter:
         payload: dict[str, Any] | None = None,
     ) -> tuple[int, Any, str]:
         return request_json_with_network(
+            method,
+            url,
+            headers=headers,
+            payload=payload,
+            timeout_seconds=self.timeout_seconds,
+            network_mode=self.network["effective_mode"],
+            proxy_url=self.network["proxy_url"],
+        )
+
+    def request_text(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> tuple[int, str, str]:
+        return request_text_with_network(
             method,
             url,
             headers=headers,
@@ -557,6 +675,41 @@ ADAPTERS: dict[str, type[BaseAdapter]] = {
 }
 
 
+class StationThrottle:
+    """Per-station rate limiter with concurrency, interval, and cooldown."""
+
+    def __init__(self, max_concurrency: int, min_interval_ms: int, cooldown_seconds: int):
+        self._semaphore = threading.Semaphore(max(1, max_concurrency))
+        self._max_concurrency = max(1, max_concurrency)
+        self._interval = max(0, min_interval_ms) / 1000.0
+        self._cooldown_seconds = max(0, cooldown_seconds)
+        self._last_request_time = 0.0
+        self._lock = threading.Lock()
+        self._cooldown_until = 0.0
+
+    def acquire(self) -> None:
+        self._semaphore.acquire()
+        with self._lock:
+            now = time.time()
+            if now < self._cooldown_until:
+                wait = self._cooldown_until - now
+                time.sleep(wait)
+            elapsed = time.time() - self._last_request_time
+            if elapsed < self._interval:
+                time.sleep(self._interval - elapsed)
+            self._last_request_time = time.time()
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+    def enter_cooldown(self, seconds: float | None = None) -> None:
+        with self._lock:
+            self._cooldown_until = time.time() + (seconds if seconds is not None else self._cooldown_seconds)
+
+    def in_cooldown(self) -> bool:
+        return time.time() < self._cooldown_until
+
+
 def _shape_for(parsed: Any) -> str:
     if isinstance(parsed, dict):
         return ",".join(list(parsed.keys())[:8])
@@ -610,6 +763,81 @@ def _extract_reasoning_text(parsed: Any) -> str:
     return " ".join(texts).strip()
 
 
+def _iter_sse_payloads(raw: str) -> Iterable[dict[str, Any]]:
+    block: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.rstrip("\r")
+        if stripped:
+            block.append(stripped)
+            continue
+        if block:
+            payload = _parse_sse_block(block)
+            if payload is not None:
+                yield payload
+            block = []
+    if block:
+        payload = _parse_sse_block(block)
+        if payload is not None:
+            yield payload
+
+
+def _parse_sse_block(lines: list[str]) -> dict[str, Any] | None:
+    data_lines: list[str] = []
+    for line in lines:
+        if line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if not data_lines:
+        return None
+    raw_data = "\n".join(data_lines).strip()
+    if not raw_data or raw_data == "[DONE]":
+        return None
+    try:
+        parsed = json.loads(raw_data)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _extract_openai_stream_text(raw: str) -> tuple[str, str | None, str]:
+    stripped = raw.strip()
+    if not stripped:
+        return "", None, ""
+
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return _extract_openai_text(parsed), _extract_error(parsed), _shape_for(parsed)
+
+    text_parts: list[str] = []
+    last_error: str | None = None
+    response_shape = "sse"
+    for payload in _iter_sse_payloads(raw):
+        payload_type = str(payload.get("type") or "").strip()
+        if payload_type and response_shape == "sse":
+            response_shape = f"sse:{payload_type}"
+
+        error = _extract_error(payload)
+        if error:
+            last_error = error
+
+        for choice in payload.get("choices", []) or []:
+            delta = choice.get("delta") or {}
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                text_parts.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("text"):
+                        text_parts.append(str(item["text"]))
+
+        if payload_type == "response.output_text.delta" and payload.get("delta"):
+            text_parts.append(str(payload["delta"]))
+
+    return "".join(text_parts).strip(), last_error, response_shape
+
+
 def normalize_probe_reply(text: str) -> str:
     normalized = " ".join(str(text or "").strip().split()).lower()
     return normalized.strip("`'\"“”‘’.,!?;:()[]{}<>，。！？；：（）【】《》")
@@ -643,9 +871,6 @@ def is_transient_error_text(error_text: str | None) -> bool:
         "timeout",
         "temporarily unavailable",
         "try again",
-        "rate limit",
-        "too many requests",
-        "overloaded",
         "bad gateway",
         "gateway timeout",
         "service unavailable",
@@ -653,7 +878,6 @@ def is_transient_error_text(error_text: str | None) -> bool:
         "ssl_connect",
         "ssl_error",
         "empty reply",
-        "http 429",
         "http 500",
         "http 502",
         "http 503",
@@ -664,6 +888,23 @@ def is_transient_error_text(error_text: str | None) -> bool:
         "curl: (56)",
     ]
     return any(marker in lowered for marker in transient_markers)
+
+
+RATE_LIMIT_MARKERS = [
+    "rate limit",
+    "too many requests",
+    "http 429",
+    "overloaded",
+    "quota exceeded",
+    "throttle",
+]
+
+
+def is_rate_limit_error(status_code: int | None, error_text: str | None) -> bool:
+    if status_code == 429:
+        return True
+    lowered = str(error_text or "").strip().lower()
+    return any(marker in lowered for marker in RATE_LIMIT_MARKERS)
 
 
 def should_retry_result(result: CheckResult | None) -> bool:
@@ -695,6 +936,8 @@ def test_model_with_retries(adapter: BaseAdapter, model_id: str, attempts: int) 
         except Exception as exc:
             result = CheckResult("error", False, 0, "", "", str(exc))
         last_result = result
+        if result.status == "rate_limited":
+            return result
         if not should_retry_result(result) or index + 1 >= max(1, attempts):
             return result
         time.sleep(RETRY_BACKOFF_SECONDS * (index + 1))
@@ -714,27 +957,88 @@ def _time_and_parse_openai(
     status_code, parsed, route = adapter.request_json("POST", url, headers=headers, payload=payload)
     latency_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     response_shape = _shape_for(parsed)
+    proxy_masked = proxy_url_masked if route == "proxy" else ""
     if status_code >= 400:
+        error_text = _extract_error(parsed) or f"HTTP {status_code}"
+        if is_rate_limit_error(status_code, error_text):
+            return CheckResult(
+                "rate_limited", False, latency_ms, response_shape, "", error_text,
+                network_mode, route, proxy_masked,
+            )
         return CheckResult(
             "error",
             False,
             latency_ms,
             response_shape,
             "",
-            _extract_error(parsed) or f"HTTP {status_code}",
+            error_text,
             network_mode,
             route,
-            proxy_url_masked if route == "proxy" else "",
+            proxy_masked,
         )
     text = _extract_openai_text(parsed)
     if text:
         if reply_matches_probe_expectation(text):
-            return CheckResult("ok", True, latency_ms, response_shape, text[:160], None, network_mode, route, proxy_url_masked if route == "proxy" else "")
-        return CheckResult("partial", False, latency_ms, response_shape, text[:160], "unexpected_output", network_mode, route, proxy_url_masked if route == "proxy" else "")
+            return CheckResult("ok", True, latency_ms, response_shape, text[:160], None, network_mode, route, proxy_masked)
+        return CheckResult("partial", False, latency_ms, response_shape, text[:160], "unexpected_output", network_mode, route, proxy_masked)
     reasoning = _extract_reasoning_text(parsed)
     if reasoning:
-        return CheckResult("partial", False, latency_ms, response_shape, reasoning[:160], "reasoning_only", network_mode, route, proxy_url_masked if route == "proxy" else "")
-    return CheckResult("empty", False, latency_ms, response_shape, "", _extract_error(parsed), network_mode, route, proxy_url_masked if route == "proxy" else "")
+        return CheckResult("partial", False, latency_ms, response_shape, reasoning[:160], "reasoning_only", network_mode, route, proxy_masked)
+
+    stream_result = _time_and_parse_openai_stream(
+        adapter,
+        url,
+        headers,
+        {**payload, "stream": True},
+        network_mode,
+        proxy_url_masked,
+    )
+    if stream_result.status != "empty" or stream_result.available:
+        return stream_result
+    return CheckResult("empty", False, latency_ms, response_shape, "", _extract_error(parsed), network_mode, route, proxy_masked)
+
+
+def _time_and_parse_openai_stream(
+    adapter: BaseAdapter,
+    url: str,
+    headers: dict[str, str],
+    payload: dict[str, Any],
+    network_mode: str,
+    proxy_url_masked: str,
+) -> CheckResult:
+    started = datetime.now(timezone.utc)
+    status_code, raw, route = adapter.request_text(
+        "POST",
+        url,
+        headers={**headers, "Accept": "text/event-stream"},
+        payload=payload,
+    )
+    latency_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
+    text, error_text, response_shape = _extract_openai_stream_text(raw)
+    proxy_masked = proxy_url_masked if route == "proxy" else ""
+    if status_code >= 400:
+        stream_error = error_text or f"HTTP {status_code}"
+        if is_rate_limit_error(status_code, stream_error):
+            return CheckResult(
+                "rate_limited", False, latency_ms, response_shape or "sse", "", stream_error,
+                network_mode, route, proxy_masked,
+            )
+        return CheckResult(
+            "error",
+            False,
+            latency_ms,
+            response_shape or "sse",
+            "",
+            stream_error,
+            network_mode,
+            route,
+            proxy_masked,
+        )
+    if text:
+        if reply_matches_probe_expectation(text):
+            return CheckResult("ok", True, latency_ms, response_shape or "sse", text[:160], None, network_mode, route, proxy_masked)
+        return CheckResult("partial", False, latency_ms, response_shape or "sse", text[:160], "unexpected_output", network_mode, route, proxy_masked)
+    return CheckResult("empty", False, latency_ms, response_shape or "sse", "", error_text, network_mode, route, proxy_masked)
 
 
 def _time_and_parse_anthropic(
@@ -751,13 +1055,19 @@ def _time_and_parse_anthropic(
     latency_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     response_shape = _shape_for(parsed)
     if status_code >= 400:
+        error_text = _extract_error(parsed) or f"HTTP {status_code}"
+        if is_rate_limit_error(status_code, error_text):
+            return CheckResult(
+                "rate_limited", False, latency_ms, response_shape, "", error_text,
+                network_mode, route, proxy_url_masked if route == "proxy" else "",
+            )
         return CheckResult(
             "error",
             False,
             latency_ms,
             response_shape,
             "",
-            _extract_error(parsed) or f"HTTP {status_code}",
+            error_text,
             network_mode,
             route,
             proxy_url_masked if route == "proxy" else "",
@@ -787,13 +1097,19 @@ def _time_and_parse_gemini(
     latency_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     response_shape = _shape_for(parsed)
     if status_code >= 400:
+        error_text = _extract_error(parsed) or f"HTTP {status_code}"
+        if is_rate_limit_error(status_code, error_text):
+            return CheckResult(
+                "rate_limited", False, latency_ms, response_shape, "", error_text,
+                network_mode, route, proxy_url_masked if route == "proxy" else "",
+            )
         return CheckResult(
             "error",
             False,
             latency_ms,
             response_shape,
             "",
-            _extract_error(parsed) or f"HTTP {status_code}",
+            error_text,
             network_mode,
             route,
             proxy_url_masked if route == "proxy" else "",
@@ -968,6 +1284,9 @@ class Database:
                     proxy_url TEXT DEFAULT '',
                     notes TEXT DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    detect_max_concurrency INTEGER NOT NULL DEFAULT 2,
+                    detect_min_interval_ms INTEGER NOT NULL DEFAULT 800,
+                    detect_cooldown_seconds INTEGER NOT NULL DEFAULT 60,
                     created_at TEXT NOT NULL
                 );
 
@@ -1113,6 +1432,9 @@ class Database:
         self.add_column_if_missing("binding_check_history", "network_mode", "TEXT DEFAULT ''")
         self.add_column_if_missing("binding_check_history", "network_route", "TEXT DEFAULT ''")
         self.add_column_if_missing("binding_check_history", "proxy_url_masked", "TEXT DEFAULT ''")
+        self.add_column_if_missing("stations", "detect_max_concurrency", "INTEGER NOT NULL DEFAULT 2")
+        self.add_column_if_missing("stations", "detect_min_interval_ms", "INTEGER NOT NULL DEFAULT 800")
+        self.add_column_if_missing("stations", "detect_cooldown_seconds", "INTEGER NOT NULL DEFAULT 60")
         self.migrate_legacy_credentials()
 
     def migrate_legacy_credentials(self) -> None:
@@ -1264,8 +1586,10 @@ class Database:
         with self.connect() as conn:
             station_id = conn.execute(
                 """
-                INSERT INTO stations (name, base_url, network_mode, proxy_url, notes, enabled, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO stations (name, base_url, network_mode, proxy_url, notes, enabled,
+                                      detect_max_concurrency, detect_min_interval_ms, detect_cooldown_seconds,
+                                      created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["name"].strip(),
@@ -1274,6 +1598,9 @@ class Database:
                     str(payload.get("proxy_url", "")).strip(),
                     payload.get("notes", "").strip(),
                     1 if as_bool(payload.get("enabled"), True) else 0,
+                    int(payload.get("detect_max_concurrency", 2)),
+                    int(payload.get("detect_min_interval_ms", 800)),
+                    int(payload.get("detect_cooldown_seconds", 60)),
                     utcnow(),
                 ),
             ).lastrowid
@@ -1284,7 +1611,8 @@ class Database:
             cursor = conn.execute(
                 """
                 UPDATE stations
-                SET name = ?, base_url = ?, network_mode = ?, proxy_url = ?, notes = ?, enabled = ?
+                SET name = ?, base_url = ?, network_mode = ?, proxy_url = ?, notes = ?, enabled = ?,
+                    detect_max_concurrency = ?, detect_min_interval_ms = ?, detect_cooldown_seconds = ?
                 WHERE id = ?
                 """,
                 (
@@ -1294,6 +1622,9 @@ class Database:
                     str(payload.get("proxy_url", "")).strip(),
                     payload.get("notes", "").strip(),
                     1 if as_bool(payload.get("enabled"), True) else 0,
+                    int(payload.get("detect_max_concurrency", 2)),
+                    int(payload.get("detect_min_interval_ms", 800)),
+                    int(payload.get("detect_cooldown_seconds", 60)),
                     station_id,
                 ),
             )
@@ -1431,7 +1762,10 @@ class Database:
                        s.name AS station_name,
                        s.base_url,
                        s.network_mode AS station_network_mode,
-                       s.proxy_url AS station_proxy_url
+                       s.proxy_url AS station_proxy_url,
+                       s.detect_max_concurrency,
+                       s.detect_min_interval_ms,
+                       s.detect_cooldown_seconds
                 FROM api_keys k
                 JOIN stations s ON s.id = k.station_id
                 WHERE k.id = ?
@@ -1490,7 +1824,10 @@ class Database:
                        s.name AS station_name,
                        s.base_url,
                        s.network_mode AS station_network_mode,
-                       s.proxy_url AS station_proxy_url
+                       s.proxy_url AS station_proxy_url,
+                       s.detect_max_concurrency,
+                       s.detect_min_interval_ms,
+                       s.detect_cooldown_seconds
                 FROM api_keys k
                 JOIN stations s ON s.id = k.station_id
                 WHERE k.enabled = 1 AND s.enabled = 1
@@ -1672,7 +2009,10 @@ class Database:
                        s.base_url,
                        s.network_mode AS station_network_mode,
                        s.proxy_url AS station_proxy_url,
-                       s.enabled AS station_enabled
+                       s.enabled AS station_enabled,
+                       s.detect_max_concurrency,
+                       s.detect_min_interval_ms,
+                       s.detect_cooldown_seconds
                 FROM protocol_bindings pb
                 JOIN api_keys k ON k.id = pb.key_id
                 JOIN stations s ON s.id = k.station_id
@@ -1763,6 +2103,60 @@ class Database:
                 (binding_id,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_binding_models_with_checks(self, binding_id: int) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT bm.model_id,
+                       bm.source,
+                       bm.fetched_at,
+                       bc.status,
+                       bc.available,
+                       bc.latency_ms,
+                       bc.response_shape,
+                       bc.preview,
+                       bc.network_mode,
+                       bc.network_route,
+                       bc.proxy_url_masked,
+                       bc.error,
+                       bc.checked_at
+                FROM binding_models bm
+                LEFT JOIN binding_checks bc
+                  ON bc.binding_id = bm.binding_id
+                 AND bc.model_id = bm.model_id
+                WHERE bm.binding_id = ?
+                ORDER BY
+                    CASE
+                        WHEN bc.available = 1 THEN 0
+                        WHEN bc.status = 'partial' THEN 1
+                        WHEN bc.status = 'empty' THEN 2
+                        WHEN bc.status = 'error' THEN 3
+                        ELSE 4
+                    END,
+                    COALESCE(bc.checked_at, '') DESC,
+                    bm.model_id ASC
+                """,
+                (binding_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_binding_detail(self, binding_id: int) -> dict[str, Any]:
+        binding = self.get_binding(binding_id)
+        models = self.list_binding_models_with_checks(binding_id)
+        return {
+            "binding": binding,
+            "models": models,
+            "summary": {
+                "model_count": len(models),
+                "available_count": sum(1 for row in models if row.get("available")),
+                "checked_count": sum(1 for row in models if row.get("status")),
+                "partial_count": sum(1 for row in models if row.get("status") == "partial"),
+                "empty_count": sum(1 for row in models if row.get("status") == "empty"),
+                "error_count": sum(1 for row in models if row.get("status") == "error"),
+                "rate_limited_count": sum(1 for row in models if row.get("status") == "rate_limited"),
+            },
+        }
 
     def upsert_binding_check(self, binding_id: int, model_id: str, result: CheckResult) -> None:
         checked_at = utcnow()
@@ -2317,7 +2711,7 @@ class Database:
         item["supported_binding_count"] = item.get("supported_binding_count") or 0
         item["available_binding_count"] = item.get("available_binding_count") or 0
         item["available_model_count"] = item.get("available_model_count") or 0
-        item.pop("api_key", None)
+        item.pop("station_proxy_url", None)
         return item
 
 
@@ -2327,6 +2721,8 @@ class RelayManagerApp:
         self.db.mark_incomplete_jobs_interrupted()
         self.db.reset_scheduler_if_running()
         self._run_lock = threading.Lock()
+        self._throttles: dict[int, StationThrottle] = {}
+        self._throttle_lock = threading.Lock()
         self.jobs = JobManager(self)
         self.scheduler = Scheduler(self)
 
@@ -2335,6 +2731,24 @@ class RelayManagerApp:
         if not adapter_cls:
             raise RelayError(f"unsupported adapter_type: {adapter_type}")
         return adapter_cls(key_record)
+
+    def get_throttle(self, station_id: int) -> StationThrottle:
+        with self._throttle_lock:
+            if station_id not in self._throttles:
+                try:
+                    station = self.db.get_station(station_id)
+                    self._throttles[station_id] = StationThrottle(
+                        station.get("detect_max_concurrency", 2),
+                        station.get("detect_min_interval_ms", 800),
+                        station.get("detect_cooldown_seconds", 60),
+                    )
+                except KeyError:
+                    self._throttles[station_id] = StationThrottle(2, 800, 60)
+            return self._throttles[station_id]
+
+    def invalidate_throttle(self, station_id: int) -> None:
+        with self._throttle_lock:
+            self._throttles.pop(station_id, None)
 
     def _detect_protocol_for_key(
         self,
@@ -2378,7 +2792,9 @@ class RelayManagerApp:
         if not last_error and not supported:
             last_error = list_error
         status = "unsupported"
-        if supported:
+        if probe_result and probe_result.status == "rate_limited":
+            status = "rate_limited"
+        elif supported:
             if probe_result and probe_result.available:
                 status = "ok"
             elif probe_result and probe_result.status in {"partial", "empty"}:
@@ -2430,12 +2846,44 @@ class RelayManagerApp:
         keys = [self.db.get_key_record(key_id)] if key_id else self.db.enabled_keys()
         results = []
         for key_record in keys:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=min(DETECTION_MAX_WORKERS, len(PROTOCOLS))) as executor:
+            station_id = key_record["station_id"]
+            throttle = self.get_throttle(station_id)
+
+            def throttled_detect(key_rec: sqlite3.Row, proto: dict[str, Any]) -> dict[str, Any]:
+                if throttle.in_cooldown():
+                    return {
+                        "key_id": key_rec["id"],
+                        "key_name": key_rec["name"],
+                        "binding_id": None,
+                        "adapter_type": proto["adapter_type"],
+                        "label": proto["label"],
+                        "supported": False,
+                        "status": "rate_limited",
+                        "model_count": 0,
+                        "probe_model": "",
+                        "network_mode": "",
+                        "network_route": "",
+                        "proxy_url_masked": "",
+                        "response_shape": "",
+                        "preview": "",
+                        "error": "station in cooldown",
+                    }
+                throttle.acquire()
+                try:
+                    result = self._detect_protocol_for_key(key_rec, proto)
+                    if result.get("status") == "rate_limited" or is_rate_limit_error(None, result.get("error")):
+                        throttle.enter_cooldown()
+                    return result
+                finally:
+                    throttle.release()
+
+            max_workers = min(throttle._max_concurrency, len(PROTOCOLS))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
                 future_map = {}
                 for index, protocol in enumerate(PROTOCOLS):
                     if progress:
                         progress.step(current_step=f"探测 {key_record['name']} · {protocol['label']}", increment=0)
-                    future = executor.submit(self._detect_protocol_for_key, key_record, protocol)
+                    future = executor.submit(throttled_detect, key_record, protocol)
                     future_map[future] = index
 
                 ordered_results: list[dict[str, Any] | None] = [None] * len(PROTOCOLS)
@@ -2536,29 +2984,54 @@ class RelayManagerApp:
     ) -> list[dict[str, Any]]:
         binding = self.db.get_binding_record(binding_id)
         adapter = self.build_adapter(binding["adapter_type"], binding)
+        station_id = binding["station_id"]
+        throttle = self.get_throttle(station_id)
         models = [model_id] if model_id else self.db.list_models_for_binding(binding_id)
         if not models and binding["probe_model"]:
             models = [binding["probe_model"]]
         results: list[dict[str, Any] | None] = [None] * len(models)
 
         def run_single(index: int, current_model: str) -> tuple[int, dict[str, Any]]:
-            result = test_model_with_retries(adapter, current_model, CHECK_RETRY_ATTEMPTS)
-            self.db.upsert_binding_check(binding_id, current_model, result)
-            return index, {
-                "binding_id": binding_id,
-                "model_id": current_model,
-                "status": result.status,
-                "available": result.available,
-                "latency_ms": result.latency_ms,
-                "response_shape": result.response_shape,
-                "preview": result.preview,
-                "network_mode": result.network_mode,
-                "network_route": result.network_route,
-                "proxy_url_masked": result.proxy_url_masked,
-                "error": result.error,
-            }
+            if throttle.in_cooldown():
+                rl_result = CheckResult("rate_limited", False, 0, "", "", "station in cooldown")
+                self.db.upsert_binding_check(binding_id, current_model, rl_result)
+                return index, {
+                    "binding_id": binding_id,
+                    "model_id": current_model,
+                    "status": "rate_limited",
+                    "available": False,
+                    "latency_ms": 0,
+                    "response_shape": "",
+                    "preview": "",
+                    "network_mode": "",
+                    "network_route": "",
+                    "proxy_url_masked": "",
+                    "error": "station in cooldown",
+                }
+            throttle.acquire()
+            try:
+                result = test_model_with_retries(adapter, current_model, CHECK_RETRY_ATTEMPTS)
+                if result.status == "rate_limited":
+                    throttle.enter_cooldown()
+                self.db.upsert_binding_check(binding_id, current_model, result)
+                return index, {
+                    "binding_id": binding_id,
+                    "model_id": current_model,
+                    "status": result.status,
+                    "available": result.available,
+                    "latency_ms": result.latency_ms,
+                    "response_shape": result.response_shape,
+                    "preview": result.preview,
+                    "network_mode": result.network_mode,
+                    "network_route": result.network_route,
+                    "proxy_url_masked": result.proxy_url_masked,
+                    "error": result.error,
+                }
+            finally:
+                throttle.release()
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(CHECK_MAX_WORKERS, len(models)))) as executor:
+        max_workers = min(throttle._max_concurrency, max(1, len(models)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
             future_map = {}
             for index, current_model in enumerate(models):
                 if progress:
@@ -2595,6 +3068,7 @@ class RelayManagerApp:
         last_proxy_url_masked = binding["last_proxy_url_masked"] or ""
         successful_row: dict[str, Any] | None = None
         supported_row: dict[str, Any] | None = None
+        rate_limited_count = 0
         for row in checks:
             result = CheckResult(
                 row["status"],
@@ -2607,6 +3081,9 @@ class RelayManagerApp:
                 row.get("network_route", "") or "",
                 row.get("proxy_url_masked", "") or "",
             )
+            if result.status == "rate_limited":
+                rate_limited_count += 1
+                continue
             if self.result_indicates_protocol_support(binding["adapter_type"], result):
                 supported = True
                 if supported_row is None:
@@ -2634,6 +3111,8 @@ class RelayManagerApp:
             status = "ok"
         elif supported:
             status = "supported"
+        elif checks and rate_limited_count == len(checks):
+            status = "rate_limited"
         elif checks:
             status = "unsupported"
 
@@ -2699,8 +3178,21 @@ class RelayManagerApp:
             bindings = [binding for binding in self.db.list_bindings() if binding["supported"]]
             if progress:
                 progress.add_total(sum(self.binding_check_target_count(binding["id"]) for binding in bindings))
+            skipped_cooldown = 0
             for binding in bindings:
                 if binding["supported"]:
+                    station_id = binding.get("station_id")
+                    if station_id:
+                        throttle = self.get_throttle(station_id)
+                        if throttle.in_cooldown():
+                            skipped_cooldown += 1
+                            target_count = self.binding_check_target_count(binding["id"])
+                            if progress:
+                                progress.step(
+                                    current_step=f"跳过 {binding.get('station_name', '')} (限流冷却中)",
+                                    increment=target_count,
+                                )
+                            continue
                     checked.extend(self.check_binding(binding["id"], progress=progress))
             self.db.update_scheduler_settings(
                 {
@@ -2947,6 +3439,10 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
             key_id = (query.get("key_id") or [""])[0]
             self._send_json(APP.db.list_bindings(int(key_id)) if key_id else APP.db.list_bindings())
             return
+        if path.startswith("/api/bindings/") and path.endswith("/models"):
+            binding_id = self._extract_int_id(path, "/api/bindings/", "/models")
+            self._send_json(APP.db.get_binding_detail(binding_id))
+            return
         if path == "/api/models/search":
             query = parse_qs(parsed.query)
             q = (query.get("q") or [""])[0].strip()
@@ -3067,7 +3563,7 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
                 target_model = model_id.strip() if isinstance(model_id, str) and model_id.strip() else None
                 job = APP.jobs.start(
                     job_type="check_binding",
-                    title=f"检查协议绑定 #{binding_id}",
+                    title=f"检查协议绑定 #{binding_id}" if not target_model else f"检查协议绑定 #{binding_id} · {target_model}",
                     scope_type="binding",
                     scope_id=binding_id,
                     total_steps=1 if target_model else APP.binding_check_target_count(binding_id),
@@ -3096,7 +3592,9 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
         try:
             if path.startswith("/api/stations/"):
                 station_id = self._extract_int_id(path, "/api/stations/")
-                self._send_json(APP.db.update_station(station_id, self._validate_station_payload(payload)))
+                result = APP.db.update_station(station_id, self._validate_station_payload(payload))
+                APP.invalidate_throttle(station_id)
+                self._send_json(result)
                 return
             if path.startswith("/api/keys/"):
                 key_id = self._extract_int_id(path, "/api/keys/")
@@ -3199,6 +3697,15 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
             raise RelayError("proxy_url is required when station network_mode=proxy")
         if proxy_url and not proxy_url.startswith(("http://", "https://", "socks5://", "socks5h://")):
             raise RelayError("proxy_url must start with http://, https://, socks5:// or socks5h://")
+        concurrency = int(payload.get("detect_max_concurrency", 2))
+        if not 1 <= concurrency <= 10:
+            raise RelayError("detect_max_concurrency must be between 1 and 10")
+        interval = int(payload.get("detect_min_interval_ms", 800))
+        if not 0 <= interval <= 30000:
+            raise RelayError("detect_min_interval_ms must be between 0 and 30000")
+        cooldown = int(payload.get("detect_cooldown_seconds", 60))
+        if not 0 <= cooldown <= 600:
+            raise RelayError("detect_cooldown_seconds must be between 0 and 600")
         return payload
 
     @staticmethod
