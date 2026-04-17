@@ -19,18 +19,6 @@
         </nav>
       </aside>
       <main class="content">
-        <section class="page-head">
-          <div>
-            <p class="eyebrow">Stations</p>
-            <h1>站点工作台</h1>
-            <p class="lede small">先看中转站，再在站点下面展开 Key。新增、编辑全部改成弹框，主流程收敛到这一页。</p>
-          </div>
-          <div class="page-head-actions">
-            <button type="button" id="create-station-btn" class="button primary">新增站点</button>
-            <a href="/keys" class="button">高级 Key 运维</a>
-          </div>
-        </section>
-
         <section class="panel">
           <div class="panel-toolbar">
             <div>
@@ -46,6 +34,8 @@
                 <input id="station-enabled-only" type="checkbox" checked>
                 <span>只看启用</span>
               </label>
+              <button type="button" id="create-station-btn" class="button primary">新增站点</button>
+              <a href="/keys" class="button">高级 Key 运维</a>
             </div>
           </div>
           <div id="stations-list" class="station-canvas"></div>

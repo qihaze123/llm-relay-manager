@@ -67,6 +67,19 @@ body {
   color: var(--accent);
 }
 
+.nav a.active {
+  font-weight: 600;
+  background: rgba(20, 83, 45, 0.14);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.dashboard-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
 .content {
   padding: 28px;
 }

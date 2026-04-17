@@ -5,7 +5,6 @@ const detailTable = document.getElementById("models-detail-table");
 const groupTable = document.getElementById("models-group-table");
 const detailBody = document.getElementById("search-results");
 const groupBody = document.getElementById("group-results");
-const pageLog = document.getElementById("page-log");
 const resetSearchBtn = document.getElementById("reset-search-btn");
 const searchSummary = document.getElementById("models-search-summary");
 const stationSelect = document.getElementById("models-station-select");
@@ -375,7 +374,7 @@ async function runSearchWithLogging() {
   try {
     await runSearch();
   } catch (error) {
-    log(pageLog, error.message);
+    console.error(error);
   }
 }
 
@@ -542,4 +541,4 @@ async function init() {
   await runSearch();
 }
 
-init().catch((error) => log(pageLog, error.message));
+init().catch((error) => console.error(error));
