@@ -86,10 +86,17 @@ window.RelayCommon = {
 
   activateNav() {
     const page = document.body.dataset.page;
+    const hints = {
+      dashboard: "总览：运行状态、概要指标、快速入口",
+      stations: "站点：录入中转站，展开站点管理 Key",
+      keys: "Keys：跨站点全局视角，批量探测/强制校验",
+      models: "模型：按模型×站点×Key×协议 查询可用性",
+      history: "历史：后台调度设置与巡检历史",
+    };
     document.querySelectorAll("[data-nav]").forEach((node) => {
-      if (node.dataset.nav === page) {
-        node.classList.add("active");
-      }
+      const key = node.dataset.nav;
+      if (hints[key]) node.setAttribute("title", hints[key]);
+      if (key === page) node.classList.add("active");
     });
   },
 
