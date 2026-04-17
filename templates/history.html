@@ -19,44 +19,24 @@
         </nav>
       </aside>
       <main class="content">
-        <section class="panel-grid">
-          <article class="panel">
-            <div class="panel-head">
-              <div>
-                <h2>调度设置</h2>
-                <p>开启后后台会自动执行“协议探测 + 模型检查”。</p>
-              </div>
-            </div>
-            <form id="scheduler-form" class="stack">
+        <section class="panel compact">
+          <div class="panel-head">
+            <h2>调度设置</h2>
+            <form id="scheduler-form" class="inline-form">
               <label class="inline-check">
                 <input type="checkbox" name="enabled">
                 <span>启用后台调度</span>
               </label>
-              <label>
-                <span>间隔分钟</span>
+              <label class="inline-field">
+                <span>间隔</span>
                 <input name="interval_minutes" type="number" min="1" max="1440" value="60">
+                <span class="suffix">分钟</span>
               </label>
-              <div class="actions">
-                <button type="submit" class="button primary">保存调度</button>
-                <button type="button" id="run-cycle-btn" class="button">立即跑一轮</button>
-              </div>
+              <button type="submit" class="button small primary">保存</button>
+              <button type="button" id="run-cycle-btn" class="button small">立即跑一轮</button>
+              <div id="scheduler-status" class="scheduler-status inline"></div>
             </form>
-            <div id="scheduler-status" class="scheduler-status"></div>
-          </article>
-
-          <article class="panel">
-            <div class="panel-head">
-              <div>
-                <h2>说明</h2>
-                <p>当前实现是进程内调度，适合本机工具，不是分布式任务系统。</p>
-              </div>
-            </div>
-            <ul class="plain-list">
-              <li>启用调度后，会周期性跑协议探测。</li>
-              <li>随后对已探测支持的协议下模型执行检查。</li>
-              <li>关闭调度不会中断当前已经在跑的周期。</li>
-            </ul>
-          </article>
+          </div>
         </section>
 
         <section class="panel">
@@ -110,13 +90,6 @@
               <tbody id="history-table"></tbody>
             </table>
           </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <h2>操作日志</h2>
-          </div>
-          <pre id="page-log" class="activity-log">等待操作...</pre>
         </section>
       </main>
     </div>

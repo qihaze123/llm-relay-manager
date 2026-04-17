@@ -34,23 +34,23 @@ window.RelayCommon = {
 
   renderSummary(grid, summary) {
     const cards = [
-      ["Stations", summary.station_count],
-      ["Keys", summary.key_count],
-      ["Protocols", summary.binding_count],
-      ["Supported", summary.supported_binding_count],
-      ["Models", summary.model_count],
-      ["Available", summary.available_count],
-      ["Checks", summary.checked_count],
-      ["Active Jobs", summary.active_job_count],
-      ["History", summary.history_count],
+      ["站点", summary.station_count],
+      ["Key", summary.key_count],
+      ["协议", summary.binding_count],
+      ["支持", summary.supported_binding_count],
+      ["模型", summary.model_count],
+      ["可用", summary.available_count],
+      ["检查", summary.checked_count],
+      ["任务", summary.active_job_count],
+      ["历史", summary.history_count],
     ];
     grid.innerHTML = cards
       .map(
         ([label, value]) => `
-          <article class="summary-card">
-            <span>${label}</span>
-            <strong>${value ?? 0}</strong>
-          </article>
+          <div class="stat-tile">
+            <span class="stat-tile-label">${label}</span>
+            <strong class="stat-tile-value">${value ?? 0}</strong>
+          </div>
         `
       )
       .join("");
@@ -74,14 +74,18 @@ window.RelayCommon = {
   },
 
   renderSchedulerStatus(element, scheduler) {
-    element.innerHTML = `
-      <div><strong>启用：</strong>${scheduler.enabled ? "是" : "否"}</div>
-      <div><strong>间隔：</strong>${scheduler.interval_minutes} 分钟</div>
-      <div><strong>上次开始：</strong>${scheduler.last_cycle_started_at || "-"}</div>
-      <div><strong>上次结束：</strong>${scheduler.last_cycle_finished_at || "-"}</div>
-      <div><strong>状态：</strong>${scheduler.last_cycle_status || "-"}</div>
-      <div><strong>备注：</strong>${scheduler.last_cycle_note || "-"}</div>
-    `;
+    const inline = element.classList.contains("inline");
+    const items = [
+      [`启用`, scheduler.enabled ? `<span class="status-badge ok">是</span>` : `<span class="status-badge neutral">否</span>`],
+      [`间隔`, `${scheduler.interval_minutes} 分钟`],
+      [`状态`, scheduler.last_cycle_status || "-"],
+      [`上次开始`, scheduler.last_cycle_started_at || "-"],
+      [`上次结束`, scheduler.last_cycle_finished_at || "-"],
+    ];
+    if (scheduler.last_cycle_note) items.push([`备注`, scheduler.last_cycle_note]);
+    element.innerHTML = items
+      .map(([k, v]) => `<div class="sched-item"><span class="sched-k">${k}</span><span class="sched-v">${v}</span></div>`)
+      .join(inline ? "" : "");
   },
 
   activateNav() {

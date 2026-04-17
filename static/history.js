@@ -1,11 +1,10 @@
-const { request, log, renderSchedulerStatus } = window.RelayCommon;
+const { request, renderSchedulerStatus } = window.RelayCommon;
 
 const schedulerForm = document.getElementById("scheduler-form");
 const schedulerStatus = document.getElementById("scheduler-status");
 const jobsTable = document.getElementById("jobs-table");
 const historyTable = document.getElementById("history-table");
 const runCycleBtn = document.getElementById("run-cycle-btn");
-const pageLog = document.getElementById("page-log");
 
 let refreshTimer = 0;
 
@@ -67,7 +66,7 @@ async function refresh() {
     window.clearTimeout(refreshTimer);
   }
   if (jobs.some((job) => ["queued", "running"].includes(job.status))) {
-    refreshTimer = window.setTimeout(() => refresh().catch((error) => log(pageLog, error.message)), 2000);
+    refreshTimer = window.setTimeout(() => refresh().catch((error) => console.error(error)), 2000);
   }
 }
 
@@ -83,9 +82,9 @@ schedulerForm.addEventListener("submit", async (event) => {
       body: JSON.stringify(payload),
     });
     await refresh();
-    log(pageLog, result);
+    ;
   } catch (error) {
-    log(pageLog, error.message);
+    console.error(error);
   }
 });
 
@@ -96,10 +95,10 @@ runCycleBtn.addEventListener("click", async () => {
       body: JSON.stringify({}),
     });
     await refresh();
-    log(pageLog, result);
+    ;
   } catch (error) {
-    log(pageLog, error.message);
+    console.error(error);
   }
 });
 
-refresh().catch((error) => log(pageLog, error.message));
+refresh().catch((error) => console.error(error));

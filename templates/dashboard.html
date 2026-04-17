@@ -19,38 +19,19 @@
         </nav>
       </aside>
       <main class="content">
-        <section class="dashboard-actions">
-          <button id="run-cycle-btn" class="button primary">跑完整探测周期</button>
-          <a class="button" href="/keys">去管理 Keys</a>
+        <section class="dashboard-topbar">
+          <div class="stat-strip" id="summary-grid"></div>
+          <div class="dashboard-actions">
+            <button id="run-cycle-btn" class="button primary">跑完整探测周期</button>
+            <a class="button" href="/keys">去管理 Keys</a>
+          </div>
         </section>
 
-        <section class="summary-grid" id="summary-grid"></section>
-
-        <section class="panel-grid">
-          <article class="panel">
-            <div class="panel-head">
-              <div>
-                <h2>协议概览</h2>
-                <p>当前系统支持的探测协议。</p>
-              </div>
-            </div>
-            <div class="chips">
-              <span class="chip">OpenAI Chat</span>
-              <span class="chip">OpenAI Responses</span>
-              <span class="chip">Claude / Anthropic Messages</span>
-              <span class="chip">Gemini GenerateContent</span>
-            </div>
-          </article>
-
-          <article class="panel">
-            <div class="panel-head">
-              <div>
-                <h2>调度状态</h2>
-                <p>后台自动探测开关和最近一次运行状态。</p>
-              </div>
-            </div>
-            <div id="scheduler-status" class="scheduler-status"></div>
-          </article>
+        <section class="panel compact">
+          <div class="panel-head">
+            <h2>调度状态</h2>
+            <div id="scheduler-status" class="scheduler-status inline"></div>
+          </div>
         </section>
 
         <section class="panel">
@@ -61,7 +42,7 @@
             </div>
           </div>
           <div class="table-wrap">
-            <table>
+            <table class="models-table">
               <thead>
                 <tr>
                   <th>时间</th>
@@ -77,13 +58,6 @@
               <tbody id="history-table"></tbody>
             </table>
           </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head">
-            <h2>操作日志</h2>
-          </div>
-          <pre id="page-log" class="activity-log">等待操作...</pre>
         </section>
       </main>
     </div>

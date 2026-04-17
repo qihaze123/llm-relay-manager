@@ -108,27 +108,26 @@ function renderKeys() {
         .map(
           (row) => `
             <tr>
-              <td>${row.id}</td>
-              <td>${escapeHtml(row.name)}</td>
+              <td><span class="muted-id" title="ID ${row.id}">#${row.id}</span> ${escapeHtml(row.name)}</td>
               <td>${escapeHtml(row.station_name)}</td>
               <td>${escapeHtml(row.group_name || "-")}</td>
-              <td>${row.enabled ? "是" : "否"}</td>
+              <td>${row.enabled ? '<span class="status-badge ok">启用</span>' : '<span class="status-badge neutral">停用</span>'}</td>
               <td>${escapeHtml(row.effective_network_mode || "-")}${row.effective_proxy_url_masked ? ` · <code>${escapeHtml(row.effective_proxy_url_masked)}</code>` : ""}</td>
-              <td><code>${escapeHtml(row.api_key_masked || "-")}</code></td>
+              <td><code class="copyable-key" data-copy-text="${escapeHtml(row.api_key || row.api_key_masked || "")}" title="点击复制完整 Key">${escapeHtml(row.api_key_masked || "-")}</code></td>
               <td>${row.supported_binding_count || 0}/${row.binding_count || 0}</td>
               <td>${row.available_model_count || 0}</td>
-              <td class="actions">
-                <button class="button small" data-entity="key" data-action="detect" data-id="${row.id}">探测协议</button>
-                <button class="button small" data-entity="key" data-action="audit" data-id="${row.id}">全量校验</button>
-                <button class="button small" data-entity="key" data-action="force-audit" data-id="${row.id}">强制全量校验</button>
-                <button class="button small" data-entity="key" data-action="edit" data-id="${row.id}">编辑</button>
-                <button class="button small danger" data-entity="key" data-action="delete" data-id="${row.id}">删除</button>
+              <td class="actions compact-actions">
+                <button class="icon-btn" data-entity="key" data-action="detect" data-id="${row.id}" title="探测协议">🔍</button>
+                <button class="icon-btn" data-entity="key" data-action="audit" data-id="${row.id}" title="全量校验">✓</button>
+                <button class="icon-btn" data-entity="key" data-action="force-audit" data-id="${row.id}" title="强制全量校验">⟳</button>
+                <button class="icon-btn" data-entity="key" data-action="edit" data-id="${row.id}" title="编辑">✎</button>
+                <button class="icon-btn danger" data-entity="key" data-action="delete" data-id="${row.id}" title="删除">✕</button>
               </td>
             </tr>
           `
         )
         .join("")
-    : `<tr><td colspan="10">暂无符合条件的 Key</td></tr>`;
+    : `<tr><td colspan="9">暂无符合条件的 Key</td></tr>`;
 }
 
 function renderBindings(rows) {

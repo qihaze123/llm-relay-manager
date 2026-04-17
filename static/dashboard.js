@@ -1,10 +1,9 @@
-const { request, renderSummary, renderSchedulerStatus, log } = window.RelayCommon;
+const { request, renderSummary, renderSchedulerStatus } = window.RelayCommon;
 
 const summaryGrid = document.getElementById("summary-grid");
 const historyTable = document.getElementById("history-table");
 const schedulerStatus = document.getElementById("scheduler-status");
 const runCycleBtn = document.getElementById("run-cycle-btn");
-const pageLog = document.getElementById("page-log");
 let refreshTimer = 0;
 
 function renderHistory(rows) {
@@ -37,18 +36,17 @@ async function refresh() {
     window.clearTimeout(refreshTimer);
   }
   if (summary.active_job_count > 0) {
-    refreshTimer = window.setTimeout(() => refresh().catch((error) => log(pageLog, error.message)), 2000);
+    refreshTimer = window.setTimeout(() => refresh().catch(console.error), 2000);
   }
 }
 
 runCycleBtn.addEventListener("click", async () => {
   try {
-    const result = await request("/api/run-cycle", { method: "POST", body: JSON.stringify({}) });
+    await request("/api/run-cycle", { method: "POST", body: JSON.stringify({}) });
     await refresh();
-    log(pageLog, result);
   } catch (error) {
-    log(pageLog, error.message);
+    console.error(error);
   }
 });
 
-refresh().catch((error) => log(pageLog, error.message));
+refresh().catch(console.error);
