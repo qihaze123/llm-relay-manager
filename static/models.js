@@ -94,6 +94,7 @@ function formatRate(value) {
 function renderDetailRow(row) {
   const rate = formatRate(row.success_rate);
   const supportedLabel = row.supported ? "支持" : "不支持";
+  const enabledLabel = row.model_enabled === 0 ? "禁用" : "启用";
   const statusLabel = row.status || "unchecked";
   const availableLabel = row.available == null ? "unchecked" : row.available ? "可用" : "不可用";
   return `
@@ -102,13 +103,14 @@ function renderDetailRow(row) {
       <td><a href="#" class="clickable-cell" data-filter="station_id" data-value="${escapeHtml(row.station_id)}" title="点击按此站点筛选">${escapeHtml(row.station_name)}</a></td>
       <td><a href="#" class="clickable-cell" data-filter="key_id" data-value="${escapeHtml(row.key_id)}" title="点击按此 Key 筛选">${escapeHtml(row.key_name)}</a></td>
       <td><a href="#" class="clickable-cell" data-filter="protocol_label" data-value="${escapeHtml(row.protocol_label)}" title="点击按此协议筛选">${escapeHtml(row.protocol_label)}</a></td>
+      <td>${renderBadge(enabledLabel, row.model_enabled === 0 ? "neutral" : "ok")}</td>
       <td>${renderBadge(supportedLabel, statusBadgeClass(row.supported, "boolean"))}</td>
       <td>${renderBadge(statusLabel, statusBadgeClass(statusLabel))}</td>
       <td>${renderBadge(availableLabel, statusBadgeClass(row.available, "boolean"))}</td>
       <td>${escapeHtml(rate)}</td>
       <td>${row.latency_ms ? `${escapeHtml(row.latency_ms)} ms` : "-"}</td>
-      <td class="cell-preview" title="${escapeHtml(row.preview || "")}">${escapeHtml(row.preview || "-")}</td>
-      <td class="cell-error" title="${escapeHtml(row.error || "")}">${escapeHtml(row.error || "-")}</td>
+      <td class="cell-preview" data-tip="${escapeHtml(row.preview || "")}">${escapeHtml(row.preview || "-")}</td>
+      <td class="cell-error" data-tip="${escapeHtml(row.error || "")}">${escapeHtml(row.error || "-")}</td>
     </tr>
   `;
 }
@@ -199,7 +201,7 @@ function renderGroupRow(g) {
             · ${renderBadge(availableLabel, statusBadgeClass(row.available, "boolean"))}
             · 成功率 ${escapeHtml(rate2)}
             · 延迟 ${row.latency_ms ? `${row.latency_ms} ms` : "-"}
-            ${row.error ? `· <span class="group-detail-error" title="${escapeHtml(row.error)}">${escapeHtml(row.error)}</span>` : ""}
+            ${row.error ? `· <span class="group-detail-error" data-tip="${escapeHtml(row.error)}">${escapeHtml(row.error)}</span>` : ""}
           </div>
         </td>
       </tr>
@@ -216,7 +218,7 @@ function renderDetailView() {
   const slice = currentRows.slice(start, start + size);
   detailBody.innerHTML = slice.length
     ? slice.map(renderDetailRow).join("")
-    : `<tr><td colspan="11">没有结果</td></tr>`;
+    : `<tr><td colspan="12">没有结果</td></tr>`;
   renderPagination(currentRows.length);
   renderDetailSortLabels();
 }
@@ -271,7 +273,7 @@ function updateSummary(rows) {
 function buildQueryString() {
   const params = new URLSearchParams();
   const names = [
-    "q", "station_id", "key_id", "protocol_label", "supported", "status", "available",
+    "q", "station_id", "key_id", "protocol_label", "supported", "status", "available", "enabled",
     "min_success_rate", "max_success_rate", "min_latency_ms", "max_latency_ms",
     "preview", "error", "sort_by", "sort_dir",
   ];
@@ -336,7 +338,7 @@ function refreshFilterOptions() {
 
 function applyInitialFilters() {
   const filterNames = [
-    "q", "station_id", "key_id", "protocol_label", "supported", "status", "available",
+    "q", "station_id", "key_id", "protocol_label", "supported", "status", "available", "enabled",
     "min_success_rate", "max_success_rate", "min_latency_ms", "max_latency_ms",
     "preview", "error", "sort_by", "sort_dir",
   ];

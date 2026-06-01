@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -49,21 +50,43 @@ PROTOCOLS = [
         "adapter_type": "openai_chat",
         "label": "OpenAI Chat",
         "probe_models": ["gpt-4o-mini", "gpt-4.1-mini", "gpt-3.5-turbo"],
+        "model_include": ["gpt", "o1", "o3", "o4", "chatgpt"],
+        "model_exclude": ["claude", "gemini"],
     },
     {
         "adapter_type": "openai_responses",
         "label": "OpenAI Responses",
         "probe_models": ["gpt-4.1-mini", "gpt-4o-mini", "gpt-5-mini"],
+        "model_include": ["gpt", "o1", "o3", "o4", "chatgpt"],
+        "model_exclude": ["claude", "gemini"],
+    },
+    {
+        "adapter_type": "codex_responses",
+        "label": "Codex / Responses",
+        "probe_models": ["gpt-5.5", "gpt-5-codex", "gpt-5.4"],
+        "model_include": ["gpt-5", "codex"],
+        "model_exclude": ["claude", "gemini"],
     },
     {
         "adapter_type": "anthropic_messages",
         "label": "Claude / Anthropic Messages",
-        "probe_models": ["claude-3-5-sonnet-latest", "claude-3-7-sonnet-latest"],
+        "probe_models": ["claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022"],
+        "model_include": ["claude-3", "claude-2", "claude-instant"],
+        "model_exclude": ["claude-opus-4", "claude-sonnet-4", "claude-haiku-4"],
+    },
+    {
+        "adapter_type": "claude_code_1m",
+        "label": "Claude Code / 1M Context",
+        "probe_models": ["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-5-20250929"],
+        "model_include": ["claude-opus-4", "claude-sonnet-4", "claude-haiku-4"],
+        "model_exclude": [],
     },
     {
         "adapter_type": "gemini_generate_content",
         "label": "Gemini GenerateContent",
         "probe_models": ["gemini-2.0-flash", "gemini-1.5-flash"],
+        "model_include": ["gemini"],
+        "model_exclude": ["claude", "gpt", "o1", "o3", "o4"],
     },
 ]
 
@@ -80,13 +103,17 @@ PROBE_NEGATIVE_KEYWORDS = ["image", "video", "audio", "veo", "mid", "seedance", 
 PROBE_FAMILY_KEYWORDS = {
     "openai_chat": ["gpt", "o1", "o3", "o4", "chatgpt"],
     "openai_responses": ["gpt", "o1", "o3", "o4", "chatgpt"],
+    "codex_responses": [],
     "anthropic_messages": ["claude"],
+    "claude_code_1m": ["claude"],
     "gemini_generate_content": ["gemini"],
 }
 PROBE_AVOID_KEYWORDS = {
     "openai_chat": ["claude", "gemini"],
     "openai_responses": ["claude", "gemini"],
+    "codex_responses": [],
     "anthropic_messages": ["gpt", "o1", "o3", "o4", "gemini"],
+    "claude_code_1m": ["gpt", "o1", "o3", "o4", "gemini"],
     "gemini_generate_content": ["claude", "gpt", "o1", "o3", "o4"],
 }
 
@@ -166,6 +193,61 @@ def protocol_label(adapter_type: str) -> str:
     return PROTOCOL_LABELS.get(adapter_type, adapter_type)
 
 
+def parse_selected_protocols(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("selected_protocols")
+    if raw is None:
+        raw = payload.get("protocols")
+    if isinstance(raw, str):
+        candidates = raw.replace(",", "\n").splitlines()
+    elif isinstance(raw, list):
+        candidates = raw
+    else:
+        candidates = []
+    allowed = {item["adapter_type"] for item in PROTOCOLS}
+    selected: list[str] = []
+    for item in candidates:
+        adapter_type = str(item or "").strip()
+        if adapter_type in allowed and adapter_type not in selected:
+            selected.append(adapter_type)
+    return selected
+
+
+def protocol_config(adapter_type: str) -> dict[str, Any]:
+    for item in PROTOCOLS:
+        if item["adapter_type"] == adapter_type:
+            return item
+    return {}
+
+
+def model_matches_protocol(adapter_type: str, model_id: str) -> bool:
+    lowered = str(model_id or "").strip().lower()
+    if not lowered:
+        return False
+    if any(token in lowered for token in PROBE_NEGATIVE_KEYWORDS):
+        return False
+    config = protocol_config(adapter_type)
+    include = [str(item).lower() for item in config.get("model_include", [])]
+    exclude = [str(item).lower() for item in config.get("model_exclude", [])]
+    if exclude and any(token in lowered for token in exclude):
+        return False
+    if include:
+        return any(token in lowered for token in include)
+    avoid = PROBE_AVOID_KEYWORDS.get(adapter_type, [])
+    if avoid and any(token in lowered for token in avoid):
+        return False
+    family = PROBE_FAMILY_KEYWORDS.get(adapter_type, [])
+    return not family or any(token in lowered for token in family)
+
+
+def filter_models_for_protocol(adapter_type: str, models: Iterable[str]) -> list[str]:
+    filtered: list[str] = []
+    for model in models:
+        model_id = str(model or "").strip()
+        if model_id and model_matches_protocol(adapter_type, model_id) and model_id not in filtered:
+            filtered.append(model_id)
+    return filtered
+
+
 def mask_proxy_url(proxy_url: str | None) -> str:
     raw = str(proxy_url or "").strip()
     if not raw:
@@ -197,11 +279,18 @@ def generate_claude_code_probe_user_id() -> str:
     return f"user_{secrets.token_hex(32)}_account__session_{uuid4()}"
 
 
-def claude_code_probe_headers(api_key: str) -> dict[str, str]:
+def claude_code_probe_headers(api_key: str, *, context_1m: bool = False) -> dict[str, str]:
+    betas = [
+        "claude-code-20250219",
+        "interleaved-thinking-2025-05-14",
+        "effort-2025-11-24",
+    ]
+    if context_1m:
+        betas.append("context-1m-2025-08-07")
     return {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,effort-2025-11-24",
+        "anthropic-beta": ",".join(betas),
         "anthropic-dangerous-direct-browser-access": "true",
         "x-app": "cli",
         "User-Agent": "claude-cli/2.1.74 (external, sdk-cli)",
@@ -260,6 +349,7 @@ def curl_json(
         "curl",
         "-sS",
         "-L",
+        "--compressed",
         "--max-time",
         str(timeout_seconds),
         "-X",
@@ -313,6 +403,7 @@ def curl_raw(
         "-sS",
         "-N",
         "-L",
+        "--compressed",
         "--max-time",
         str(timeout_seconds),
         "-X",
@@ -583,8 +674,85 @@ class OpenAIResponsesAdapter(BaseAdapter):
         )
 
 
+class CodexResponsesAdapter(OpenAIResponsesAdapter):
+    adapter_type = "codex_responses"
+
+    @staticmethod
+    def _codex_instructions() -> str:
+        return (
+            "You are a coding agent running in the Codex CLI, a terminal-based coding assistant. "
+            "Codex CLI is an open source project led by OpenAI. You are expected to be precise, "
+            "safe, and helpful. Reply concisely to the user's probe."
+        )
+
+    @staticmethod
+    def _codex_developer_context() -> str:
+        return (
+            "<permissions instructions>\n"
+            "Filesystem sandboxing defines which files can be read or written. "
+            "`sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. "
+            "Network access is enabled. Approval policy is currently never.\n"
+            "</permissions instructions>"
+        )
+
+    def test_model(self, model_id: str) -> CheckResult:
+        conversation_id = str(uuid4())
+        turn_id = str(uuid4())
+        url = f"{openai_api_root(self.key_record['base_url'])}/responses"
+        headers = {
+            "Authorization": f"Bearer {self.key_record['api_key']}",
+            "originator": "Codex Desktop",
+            "User-Agent": "Codex Desktop/0.117.0 (Mac OS; arm64) Apple_Terminal (codex-exec; 0.117.0)",
+            "x-client-request-id": conversation_id,
+            "session_id": conversation_id,
+            "x-codex-turn-metadata": json.dumps(
+                {
+                    "session_id": conversation_id,
+                    "turn_id": turn_id,
+                    "sandbox": "none",
+                },
+                separators=(",", ":"),
+            ),
+        }
+        payload = {
+            "model": model_id,
+            "instructions": self._codex_instructions(),
+            "input": [
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": self._codex_developer_context()}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Reply with exactly ok"}],
+                }
+            ],
+            "tools": [],
+            "tool_choice": "auto",
+            "parallel_tool_calls": False,
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "store": False,
+            "stream": True,
+            "include": ["reasoning.encrypted_content"],
+            "service_tier": "priority",
+            "prompt_cache_key": conversation_id,
+        }
+        return _time_and_parse_openai_stream(
+            self,
+            url,
+            headers,
+            payload,
+            self.network["effective_mode"],
+            self.network["proxy_url_masked"],
+        )
+
+
 class AnthropicMessagesAdapter(BaseAdapter):
     adapter_type = "anthropic_messages"
+    use_claude_code_probe = False
+    use_context_1m = False
 
     def list_models(self) -> list[str]:
         url = f"{anthropic_api_root(self.key_record['base_url'])}/models"
@@ -611,14 +779,21 @@ class AnthropicMessagesAdapter(BaseAdapter):
 
     def test_model(self, model_id: str) -> CheckResult:
         url = f"{anthropic_api_root(self.key_record['base_url'])}/messages?beta=true"
-        headers = claude_code_probe_headers(self.key_record["api_key"])
+        if self.use_claude_code_probe:
+            headers = claude_code_probe_headers(self.key_record["api_key"], context_1m=self.use_context_1m)
+        else:
+            headers = {
+                "x-api-key": self.key_record["api_key"],
+                "anthropic-version": "2023-06-01",
+            }
         payload = {
             "model": model_id,
             "max_tokens": 16,
             "messages": [{"role": "user", "content": "Reply with exactly ok"}],
-            "system": claude_code_probe_system(),
             "metadata": {"user_id": generate_claude_code_probe_user_id()},
         }
+        if self.use_claude_code_probe:
+            payload["system"] = claude_code_probe_system()
         return _time_and_parse_anthropic(
             self,
             url,
@@ -628,6 +803,12 @@ class AnthropicMessagesAdapter(BaseAdapter):
             self.network["effective_mode"],
             self.network["proxy_url_masked"],
         )
+
+
+class ClaudeCode1MAdapter(AnthropicMessagesAdapter):
+    adapter_type = "claude_code_1m"
+    use_claude_code_probe = True
+    use_context_1m = True
 
 
 class GeminiGenerateContentAdapter(BaseAdapter):
@@ -670,7 +851,9 @@ class GeminiGenerateContentAdapter(BaseAdapter):
 ADAPTERS: dict[str, type[BaseAdapter]] = {
     OpenAIChatAdapter.adapter_type: OpenAIChatAdapter,
     OpenAIResponsesAdapter.adapter_type: OpenAIResponsesAdapter,
+    CodexResponsesAdapter.adapter_type: CodexResponsesAdapter,
     AnthropicMessagesAdapter.adapter_type: AnthropicMessagesAdapter,
+    ClaudeCode1MAdapter.adapter_type: ClaudeCode1MAdapter,
     GeminiGenerateContentAdapter.adapter_type: GeminiGenerateContentAdapter,
 }
 
@@ -727,6 +910,53 @@ def _extract_error(parsed: Any) -> str | None:
     if parsed.get("message"):
         return str(parsed["message"])
     return None
+
+
+
+def solve_acw_sc_cookie(raw: str) -> str | None:
+    if "acw_sc__v2" not in raw or "var arg1" not in raw:
+        return None
+    node_script = r'''
+const fs = require('fs');
+const vm = require('vm');
+const html = fs.readFileSync(0, 'utf8');
+const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+if (!script) process.exit(1);
+let cookie = '';
+const sandbox = {
+  Date,
+  RegExp,
+  parseInt,
+  decodeURIComponent,
+  String,
+  Math,
+  Boolean,
+  arguments: [],
+  document: {
+    get cookie() { return cookie; },
+    set cookie(value) { cookie = value; },
+    location: { reload() {} },
+  },
+  location: { reload() {} },
+};
+vm.runInNewContext(script, sandbox, {timeout: 1000});
+process.stdout.write(cookie);
+'''
+    try:
+        proc = subprocess.run(
+            ["node", "-e", node_script],
+            input=raw,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    cookie = proc.stdout.strip()
+    match = re.search(r"\bacw_sc__v2=([^;\s]+)", cookie)
+    return f"acw_sc__v2={match.group(1)}" if match else None
 
 
 def _extract_openai_text(parsed: Any) -> str:
@@ -802,6 +1032,8 @@ def _extract_openai_stream_text(raw: str) -> tuple[str, str | None, str]:
     stripped = raw.strip()
     if not stripped:
         return "", None, ""
+    if stripped.startswith("<"):
+        return "", "unexpected html response", "html"
 
     try:
         parsed = json.loads(stripped)
@@ -897,6 +1129,9 @@ RATE_LIMIT_MARKERS = [
     "overloaded",
     "quota exceeded",
     "throttle",
+    "负载",
+    "达到上限",
+    "稍后重试",
 ]
 
 
@@ -953,6 +1188,17 @@ def _time_and_parse_openai(
     network_mode: str,
     proxy_url_masked: str,
 ) -> CheckResult:
+    stream_result = _time_and_parse_openai_stream(
+        adapter,
+        url,
+        headers,
+        {**payload, "stream": True},
+        network_mode,
+        proxy_url_masked,
+    )
+    if stream_result.status != "empty" or stream_result.available:
+        return stream_result
+
     started = datetime.now(timezone.utc)
     status_code, parsed, route = adapter.request_json("POST", url, headers=headers, payload=payload)
     latency_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
@@ -984,17 +1230,6 @@ def _time_and_parse_openai(
     reasoning = _extract_reasoning_text(parsed)
     if reasoning:
         return CheckResult("partial", False, latency_ms, response_shape, reasoning[:160], "reasoning_only", network_mode, route, proxy_masked)
-
-    stream_result = _time_and_parse_openai_stream(
-        adapter,
-        url,
-        headers,
-        {**payload, "stream": True},
-        network_mode,
-        proxy_url_masked,
-    )
-    if stream_result.status != "empty" or stream_result.available:
-        return stream_result
     return CheckResult("empty", False, latency_ms, response_shape, "", _extract_error(parsed), network_mode, route, proxy_masked)
 
 
@@ -1007,12 +1242,21 @@ def _time_and_parse_openai_stream(
     proxy_url_masked: str,
 ) -> CheckResult:
     started = datetime.now(timezone.utc)
+    request_headers = {**headers, "Accept": "text/event-stream"}
     status_code, raw, route = adapter.request_text(
         "POST",
         url,
-        headers={**headers, "Accept": "text/event-stream"},
+        headers=request_headers,
         payload=payload,
     )
+    challenge_cookie = solve_acw_sc_cookie(raw)
+    if challenge_cookie:
+        status_code, raw, route = adapter.request_text(
+            "POST",
+            url,
+            headers={**request_headers, "Cookie": challenge_cookie},
+            payload=payload,
+        )
     latency_ms = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     text, error_text, response_shape = _extract_openai_stream_text(raw)
     proxy_masked = proxy_url_masked if route == "proxy" else ""
@@ -1038,6 +1282,8 @@ def _time_and_parse_openai_stream(
         if reply_matches_probe_expectation(text):
             return CheckResult("ok", True, latency_ms, response_shape or "sse", text[:160], None, network_mode, route, proxy_masked)
         return CheckResult("partial", False, latency_ms, response_shape or "sse", text[:160], "unexpected_output", network_mode, route, proxy_masked)
+    if error_text:
+        return CheckResult("error", False, latency_ms, response_shape or "sse", "", error_text, network_mode, route, proxy_masked)
     return CheckResult("empty", False, latency_ms, response_shape or "sse", "", error_text, network_mode, route, proxy_masked)
 
 
@@ -1129,6 +1375,7 @@ def _time_and_parse_gemini(
 
 
 def choose_probe_model(adapter_type: str, models: list[str]) -> str:
+    models = filter_models_for_protocol(adapter_type, models)
     preferred_keywords = [
         "gpt",
         "glm",
@@ -1178,6 +1425,7 @@ def choose_probe_model(adapter_type: str, models: list[str]) -> str:
 
 
 def choose_probe_models(adapter_type: str, models: list[str], limit: int = 4) -> list[str]:
+    models = filter_models_for_protocol(adapter_type, models)
     candidates: list[str] = []
     preferred = choose_probe_model(adapter_type, models)
     if preferred:
@@ -1333,6 +1581,11 @@ class Database:
                     model_id TEXT NOT NULL,
                     source TEXT NOT NULL,
                     fetched_at TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    skip_reason TEXT DEFAULT '',
+                    user_note TEXT DEFAULT '',
+                    first_seen_at TEXT DEFAULT '',
+                    last_seen_at TEXT DEFAULT '',
                     PRIMARY KEY (binding_id, model_id),
                     FOREIGN KEY (binding_id) REFERENCES protocol_bindings(id) ON DELETE CASCADE
                 );
@@ -1432,6 +1685,11 @@ class Database:
         self.add_column_if_missing("binding_check_history", "network_mode", "TEXT DEFAULT ''")
         self.add_column_if_missing("binding_check_history", "network_route", "TEXT DEFAULT ''")
         self.add_column_if_missing("binding_check_history", "proxy_url_masked", "TEXT DEFAULT ''")
+        self.add_column_if_missing("binding_models", "enabled", "INTEGER NOT NULL DEFAULT 1")
+        self.add_column_if_missing("binding_models", "skip_reason", "TEXT DEFAULT ''")
+        self.add_column_if_missing("binding_models", "user_note", "TEXT DEFAULT ''")
+        self.add_column_if_missing("binding_models", "first_seen_at", "TEXT DEFAULT ''")
+        self.add_column_if_missing("binding_models", "last_seen_at", "TEXT DEFAULT ''")
         self.add_column_if_missing("stations", "detect_max_concurrency", "INTEGER NOT NULL DEFAULT 2")
         self.add_column_if_missing("stations", "detect_min_interval_ms", "INTEGER NOT NULL DEFAULT 800")
         self.add_column_if_missing("stations", "detect_cooldown_seconds", "INTEGER NOT NULL DEFAULT 60")
@@ -1672,6 +1930,7 @@ class Database:
                          JOIN binding_models bm
                            ON bm.binding_id = bc.binding_id
                           AND bm.model_id = bc.model_id
+                          AND bm.enabled = 1
                          JOIN protocol_bindings pb ON pb.id = bc.binding_id
                          WHERE pb.key_id = k.id AND bc.available = 1
                        ) AS available_binding_count,
@@ -1681,6 +1940,7 @@ class Database:
                          JOIN binding_models bm
                            ON bm.binding_id = bc.binding_id
                           AND bm.model_id = bc.model_id
+                          AND bm.enabled = 1
                          JOIN protocol_bindings pb ON pb.id = bc.binding_id
                          WHERE pb.key_id = k.id AND bc.available = 1
                        ) AS available_model_count,
@@ -1717,6 +1977,44 @@ class Database:
                 ),
             ).lastrowid
         return self.get_key(key_id)
+
+    def configure_key_protocols(self, key_id: int, adapter_types: list[str]) -> list[dict[str, Any]]:
+        now = utcnow()
+        configured: list[dict[str, Any]] = []
+        for adapter_type in adapter_types:
+            existing = self.find_binding_record(key_id, adapter_type)
+            configured.append(
+                self.upsert_binding(
+                    key_id,
+                    {
+                        "adapter_type": adapter_type,
+                        "label": protocol_label(adapter_type),
+                        "status": existing["status"] if existing and existing["status"] else "manual",
+                        "supported": 1,
+                        "model_count": existing["model_count"] if existing else 0,
+                        "probe_model": existing["probe_model"] if existing else "",
+                        "response_shape": existing["response_shape"] if existing else "",
+                        "preview": existing["preview"] if existing else "",
+                        "last_network_mode": existing["last_network_mode"] if existing else "",
+                        "last_network_route": existing["last_network_route"] if existing else "",
+                        "last_proxy_url_masked": existing["last_proxy_url_masked"] if existing else "",
+                        "last_error": existing["last_error"] if existing else "",
+                        "detected_at": existing["detected_at"] if existing and existing["detected_at"] else now,
+                        "last_discovered_at": existing["last_discovered_at"] if existing else "",
+                        "last_checked_at": existing["last_checked_at"] if existing else "",
+                    },
+                )
+            )
+        with self.connect() as conn:
+            if adapter_types:
+                placeholders = ",".join("?" for _ in adapter_types)
+                conn.execute(
+                    f"DELETE FROM protocol_bindings WHERE key_id = ? AND adapter_type NOT IN ({placeholders})",
+                    [key_id, *adapter_types],
+                )
+            else:
+                conn.execute("DELETE FROM protocol_bindings WHERE key_id = ?", (key_id,))
+        return configured
 
     def update_key(self, key_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         current = self.get_key_record(key_id)
@@ -1793,6 +2091,7 @@ class Database:
                          JOIN binding_models bm
                            ON bm.binding_id = bc.binding_id
                           AND bm.model_id = bc.model_id
+                          AND bm.enabled = 1
                          JOIN protocol_bindings pb ON pb.id = bc.binding_id
                          WHERE pb.key_id = k.id AND bc.available = 1
                        ) AS available_binding_count,
@@ -1802,6 +2101,7 @@ class Database:
                          JOIN binding_models bm
                            ON bm.binding_id = bc.binding_id
                           AND bm.model_id = bc.model_id
+                          AND bm.enabled = 1
                          JOIN protocol_bindings pb ON pb.id = bc.binding_id
                          WHERE pb.key_id = k.id AND bc.available = 1
                        ) AS available_model_count,
@@ -1909,14 +2209,21 @@ class Database:
             if model and model not in models_list:
                 models_list.append(model)
         with self.connect() as conn:
-            conn.execute("DELETE FROM binding_models WHERE binding_id = ?", (binding_id,))
             for model_id in models_list:
                 conn.execute(
                     """
-                    INSERT INTO binding_models (binding_id, model_id, source, fetched_at)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO binding_models (
+                        binding_id, model_id, source, fetched_at,
+                        enabled, skip_reason, user_note, first_seen_at, last_seen_at
+                    )
+                    VALUES (?, ?, ?, ?, 1, '', '', ?, ?)
+                    ON CONFLICT(binding_id, model_id)
+                    DO UPDATE SET
+                        source = excluded.source,
+                        fetched_at = excluded.fetched_at,
+                        last_seen_at = excluded.last_seen_at
                     """,
-                    (binding_id, model_id, source, now),
+                    (binding_id, model_id, source, now, now, now),
                 )
             conn.execute(
                 """
@@ -1942,6 +2249,7 @@ class Database:
                      JOIN binding_models bm
                        ON bm.binding_id = bc.binding_id
                       AND bm.model_id = bc.model_id
+                      AND bm.enabled = 1
                      WHERE bc.binding_id = pb.id
                    ) AS checked_model_count,
                    (
@@ -1950,6 +2258,7 @@ class Database:
                      JOIN binding_models bm
                        ON bm.binding_id = bc.binding_id
                       AND bm.model_id = bc.model_id
+                      AND bm.enabled = 1
                      WHERE bc.binding_id = pb.id AND bc.available = 1
                    ) AS available_model_count,
                    (
@@ -1958,6 +2267,7 @@ class Database:
                      JOIN binding_models bm
                        ON bm.binding_id = bc.binding_id
                       AND bm.model_id = bc.model_id
+                      AND bm.enabled = 1
                      WHERE bc.binding_id = pb.id AND bc.status = 'partial'
                    ) AS partial_model_count,
                    (
@@ -1966,6 +2276,7 @@ class Database:
                      JOIN binding_models bm
                        ON bm.binding_id = bc.binding_id
                       AND bm.model_id = bc.model_id
+                      AND bm.enabled = 1
                      WHERE bc.binding_id = pb.id AND bc.status = 'empty'
                    ) AS empty_model_count,
                    (
@@ -1974,6 +2285,7 @@ class Database:
                      JOIN binding_models bm
                        ON bm.binding_id = bc.binding_id
                       AND bm.model_id = bc.model_id
+                      AND bm.enabled = 1
                      WHERE bc.binding_id = pb.id AND bc.status = 'error'
                    ) AS error_model_count,
                    (SELECT COUNT(*) FROM binding_check_history h WHERE h.binding_id = pb.id) AS history_check_count,
@@ -2077,13 +2389,48 @@ class Database:
                 (key_id, adapter_type),
             ).fetchone()
 
-    def list_models_for_binding(self, binding_id: int) -> list[str]:
+    def list_models_for_binding(self, binding_id: int, enabled_only: bool = True) -> list[str]:
+        where = "WHERE binding_id = ?"
+        if enabled_only:
+            where += " AND enabled = 1"
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT model_id FROM binding_models WHERE binding_id = ? ORDER BY model_id ASC",
+                f"SELECT model_id FROM binding_models {where} ORDER BY model_id ASC",
                 (binding_id,),
             ).fetchall()
         return [row["model_id"] for row in rows]
+
+    def update_binding_models_enabled(
+        self,
+        binding_id: int,
+        model_ids: Iterable[str],
+        enabled: bool,
+        skip_reason: str = "",
+    ) -> dict[str, Any]:
+        models = [str(model_id or "").strip() for model_id in model_ids]
+        models = [model_id for index, model_id in enumerate(models) if model_id and model_id not in models[:index]]
+        if not models:
+            raise RelayError("at least one model_id is required")
+        now = utcnow()
+        reason = "" if enabled else (str(skip_reason or "user_disabled").strip() or "user_disabled")
+        with self.connect() as conn:
+            placeholders = ",".join("?" for _ in models)
+            existing_rows = conn.execute(
+                f"SELECT model_id FROM binding_models WHERE binding_id = ? AND model_id IN ({placeholders})",
+                [binding_id, *models],
+            ).fetchall()
+            existing = [row["model_id"] for row in existing_rows]
+            if not existing:
+                raise KeyError("model binding not found")
+            conn.execute(
+                f"""
+                UPDATE binding_models
+                SET enabled = ?, skip_reason = ?, last_seen_at = ?
+                WHERE binding_id = ? AND model_id IN ({placeholders})
+                """,
+                [1 if enabled else 0, reason, now, binding_id, *existing],
+            )
+        return {"binding_id": binding_id, "updated": len(existing), "enabled": enabled, "model_ids": existing}
 
     def list_current_binding_checks(self, binding_id: int) -> list[dict[str, Any]]:
         with self.connect() as conn:
@@ -2097,6 +2444,7 @@ class Database:
                     FROM binding_models bm
                     WHERE bm.binding_id = binding_checks.binding_id
                       AND bm.model_id = binding_checks.model_id
+                      AND bm.enabled = 1
                   )
                 ORDER BY checked_at DESC, model_id ASC
                 """,
@@ -2111,6 +2459,11 @@ class Database:
                 SELECT bm.model_id,
                        bm.source,
                        bm.fetched_at,
+                       bm.enabled,
+                       bm.skip_reason,
+                       bm.user_note,
+                       bm.first_seen_at,
+                       bm.last_seen_at,
                        bc.status,
                        bc.available,
                        bc.latency_ms,
@@ -2127,6 +2480,7 @@ class Database:
                  AND bc.model_id = bm.model_id
                 WHERE bm.binding_id = ?
                 ORDER BY
+                    CASE WHEN bm.enabled = 1 THEN 0 ELSE 1 END,
                     CASE
                         WHEN bc.available = 1 THEN 0
                         WHEN bc.status = 'partial' THEN 1
@@ -2149,12 +2503,14 @@ class Database:
             "models": models,
             "summary": {
                 "model_count": len(models),
-                "available_count": sum(1 for row in models if row.get("available")),
-                "checked_count": sum(1 for row in models if row.get("status")),
-                "partial_count": sum(1 for row in models if row.get("status") == "partial"),
-                "empty_count": sum(1 for row in models if row.get("status") == "empty"),
-                "error_count": sum(1 for row in models if row.get("status") == "error"),
-                "rate_limited_count": sum(1 for row in models if row.get("status") == "rate_limited"),
+                "enabled_count": sum(1 for row in models if row.get("enabled") != 0),
+                "disabled_count": sum(1 for row in models if row.get("enabled") == 0),
+                "available_count": sum(1 for row in models if row.get("enabled") != 0 and row.get("available")),
+                "checked_count": sum(1 for row in models if row.get("enabled") != 0 and row.get("status")),
+                "partial_count": sum(1 for row in models if row.get("enabled") != 0 and row.get("status") == "partial"),
+                "empty_count": sum(1 for row in models if row.get("enabled") != 0 and row.get("status") == "empty"),
+                "error_count": sum(1 for row in models if row.get("enabled") != 0 and row.get("status") == "error"),
+                "rate_limited_count": sum(1 for row in models if row.get("enabled") != 0 and row.get("status") == "rate_limited"),
             },
         }
 
@@ -2236,6 +2592,7 @@ class Database:
         status_filter = str(filters.get("status") or "").strip().lower()
         supported_filter = str(filters.get("supported") or "").strip().lower()
         available_filter = str(filters.get("available") or "").strip().lower()
+        enabled_filter = str(filters.get("enabled") or "").strip().lower()
         station_id_filter = str(filters.get("station_id") or "").strip()
         key_id_filter = str(filters.get("key_id") or "").strip()
         station_query = str(filters.get("station_name") or "").strip()
@@ -2252,6 +2609,9 @@ class Database:
             SELECT bm.model_id,
                    bm.source,
                    bm.fetched_at,
+                   bm.enabled AS model_enabled,
+                   bm.skip_reason,
+                   bm.user_note,
                    pb.id AS binding_id,
                    pb.adapter_type,
                    pb.label AS protocol_label,
@@ -2350,6 +2710,9 @@ class Database:
             sql += " AND COALESCE(bc.available, 0) = 0"
         elif available_filter == "unchecked":
             sql += " AND bc.available IS NULL"
+        if enabled_filter in {"1", "0"}:
+            sql += " AND bm.enabled = ?"
+            params.append(int(enabled_filter))
         if min_latency.isdigit():
             sql += " AND COALESCE(bc.latency_ms, 0) >= ?"
             params.append(int(min_latency))
@@ -2424,6 +2787,7 @@ class Database:
             "source": "bm.source",
             "fetched_at": "bm.fetched_at",
             "checked_at": "COALESCE(bc.checked_at, '')",
+            "model_enabled": "bm.enabled",
         }
         order_expr = orderable.get(sort_by, "bm.model_id")
         order_direction = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
@@ -2763,7 +3127,8 @@ class RelayManagerApp:
             discovered_models = run_with_retries(adapter.list_models, LIST_RETRY_ATTEMPTS)
         except Exception as exc:
             list_error = str(exc)
-        list_models = merge_model_lists(discovered_models, seed_models)
+        all_list_models = merge_model_lists(discovered_models, seed_models)
+        list_models = filter_models_for_protocol(protocol["adapter_type"], all_list_models)
         source = "adapter_list"
         if discovered_models and seed_models:
             source = "adapter_list+seed_models"
@@ -2773,7 +3138,8 @@ class RelayManagerApp:
         probe_model = ""
         probe_result: CheckResult | None = None
         probe_error = ""
-        for candidate in choose_probe_models(protocol["adapter_type"], list_models):
+        probe_candidates = [] if all_list_models and not list_models else choose_probe_models(protocol["adapter_type"], list_models)
+        for candidate in probe_candidates:
             probe_model = candidate
             current_result = test_model_with_retries(adapter, candidate, PROBE_RETRY_ATTEMPTS)
             current_error = current_result.error or ""
@@ -2842,10 +3208,16 @@ class RelayManagerApp:
             "error": last_error,
         }
 
-    def detect_protocols(self, key_id: int | None = None, progress: JobProgress | None = None) -> list[dict[str, Any]]:
+    def detect_protocols(
+        self,
+        key_id: int | None = None,
+        progress: JobProgress | None = None,
+        include_all: bool = False,
+    ) -> list[dict[str, Any]]:
         keys = [self.db.get_key_record(key_id)] if key_id else self.db.enabled_keys()
         results = []
         for key_record in keys:
+            protocols = self.protocols_for_key(key_record["id"], include_all=include_all)
             station_id = key_record["station_id"]
             throttle = self.get_throttle(station_id)
 
@@ -2877,16 +3249,16 @@ class RelayManagerApp:
                 finally:
                     throttle.release()
 
-            max_workers = min(throttle._max_concurrency, len(PROTOCOLS))
+            max_workers = min(throttle._max_concurrency, len(protocols))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
                 future_map = {}
-                for index, protocol in enumerate(PROTOCOLS):
+                for index, protocol in enumerate(protocols):
                     if progress:
                         progress.step(current_step=f"探测 {key_record['name']} · {protocol['label']}", increment=0)
                     future = executor.submit(throttled_detect, key_record, protocol)
                     future_map[future] = index
 
-                ordered_results: list[dict[str, Any] | None] = [None] * len(PROTOCOLS)
+                ordered_results: list[dict[str, Any] | None] = [None] * len(protocols)
                 for future in concurrent.futures.as_completed(future_map):
                     index = future_map[future]
                     ordered_results[index] = future.result()
@@ -2895,12 +3267,20 @@ class RelayManagerApp:
                 results.extend([item for item in ordered_results if item is not None])
         return results
 
+    def protocols_for_key(self, key_id: int, *, include_all: bool = False) -> list[dict[str, Any]]:
+        if include_all:
+            return PROTOCOLS
+        selected = {binding["adapter_type"] for binding in self.db.list_bindings(key_id)}
+        if not selected:
+            return PROTOCOLS
+        return [protocol for protocol in PROTOCOLS if protocol["adapter_type"] in selected]
+
     def rediscover_binding(self, binding_id: int) -> dict[str, Any]:
         binding = self.db.get_binding_record(binding_id)
         adapter = self.build_adapter(binding["adapter_type"], binding)
         seed_models = parse_seed_models(binding["seed_models"])
         try:
-            models = merge_model_lists(adapter.list_models(), seed_models)
+            models = filter_models_for_protocol(binding["adapter_type"], merge_model_lists(adapter.list_models(), seed_models))
             self.db.replace_binding_models(binding_id, models, "adapter_list")
             updated = self.db.upsert_binding(
                 binding["key_id"],
@@ -2925,7 +3305,8 @@ class RelayManagerApp:
             return {"binding_id": binding_id, "status": "ok", "model_count": len(models), "models": models, "binding": updated}
         except Exception as exc:
             if seed_models:
-                self.db.replace_binding_models(binding_id, seed_models, "seed_models")
+                filtered_seed_models = filter_models_for_protocol(binding["adapter_type"], seed_models)
+                self.db.replace_binding_models(binding_id, filtered_seed_models, "seed_models")
                 updated = self.db.upsert_binding(
                     binding["key_id"],
                     {
@@ -2933,7 +3314,7 @@ class RelayManagerApp:
                         "label": binding["label"],
                         "status": "listed" if binding["supported"] else binding["status"],
                         "supported": binding["supported"],
-                        "model_count": len(seed_models),
+                        "model_count": len(filtered_seed_models),
                         "probe_model": binding["probe_model"],
                         "response_shape": binding["response_shape"],
                         "preview": binding["preview"],
@@ -2950,8 +3331,8 @@ class RelayManagerApp:
                     "binding_id": binding_id,
                     "status": "seed_only",
                     "error": str(exc),
-                    "model_count": len(seed_models),
-                    "models": seed_models,
+                    "model_count": len(filtered_seed_models),
+                    "models": filtered_seed_models,
                     "binding": updated,
                 }
             self.db.upsert_binding(
@@ -2992,6 +3373,22 @@ class RelayManagerApp:
         results: list[dict[str, Any] | None] = [None] * len(models)
 
         def run_single(index: int, current_model: str) -> tuple[int, dict[str, Any]]:
+            if not model_matches_protocol(binding["adapter_type"], current_model):
+                skipped_result = CheckResult("unsupported", False, 0, "", "", "model skipped by protocol profile")
+                self.db.upsert_binding_check(binding_id, current_model, skipped_result)
+                return index, {
+                    "binding_id": binding_id,
+                    "model_id": current_model,
+                    "status": "unsupported",
+                    "available": False,
+                    "latency_ms": 0,
+                    "response_shape": "",
+                    "preview": "",
+                    "network_mode": "",
+                    "network_route": "",
+                    "proxy_url_masked": "",
+                    "error": "model skipped by protocol profile",
+                }
             if throttle.in_cooldown():
                 rl_result = CheckResult("rate_limited", False, 0, "", "", "station in cooldown")
                 self.db.upsert_binding_check(binding_id, current_model, rl_result)
@@ -3220,23 +3617,79 @@ class RelayManagerApp:
         force_all_bindings: bool = False,
         progress: JobProgress | None = None,
     ) -> dict[str, Any]:
+        if not force_all_bindings:
+            bindings = [binding for binding in self.db.list_bindings(key_id) if binding["supported"]]
+            if progress:
+                progress.set_total(len(bindings))
+            discovered: list[dict[str, Any]] = []
+            for binding in bindings:
+                label = binding.get("label") or binding.get("adapter_type") or ""
+                if progress:
+                    progress.step(f"刷新模型列表 · {label}", increment=0)
+                try:
+                    discovered.append(self.rediscover_binding(binding["id"]))
+                except Exception as exc:
+                    discovered.append({"binding_id": binding["id"], "status": "error", "error": str(exc)})
+                if progress:
+                    progress.step(f"已刷新 · {label}")
+            if progress:
+                progress.add_total(sum(self.binding_check_target_count(binding["id"]) for binding in bindings))
+            checked: list[dict[str, Any]] = []
+            for binding in bindings:
+                checked.extend(self.check_binding(binding["id"], progress=progress))
+            return {
+                "key_id": key_id,
+                "force_all_bindings": False,
+                "detection": [],
+                "discovered": discovered,
+                "checked": checked,
+                "key": self.db.get_key(key_id),
+            }
+
         if progress:
             progress.set_total(len(PROTOCOLS))
-        detection = self.detect_protocols(key_id, progress=progress)
+        selected_protocols = [binding["adapter_type"] for binding in self.db.list_bindings(key_id)]
+        detection = self.detect_protocols(key_id, progress=progress, include_all=True)
+        if selected_protocols:
+            self.db.configure_key_protocols(key_id, selected_protocols)
         checked: list[dict[str, Any]] = []
-        bindings = [binding for binding in self.db.list_bindings(key_id) if force_all_bindings or binding["supported"]]
+        bindings = [binding for binding in self.db.list_bindings(key_id) if binding["supported"]]
         if progress:
             progress.add_total(sum(self.binding_check_target_count(binding["id"]) for binding in bindings))
         for binding in bindings:
-            if force_all_bindings or binding["supported"]:
-                checked.extend(self.check_binding(binding["id"], progress=progress))
+            checked.extend(self.check_binding(binding["id"], progress=progress))
         return {
             "key_id": key_id,
             "force_all_bindings": force_all_bindings,
+            "selected_protocols_restored": selected_protocols,
+            "unselected_supported": [
+                item for item in detection if item.get("supported") and item.get("adapter_type") not in selected_protocols
+            ],
             "detection": detection,
             "checked": checked,
             "key": self.db.get_key(key_id),
         }
+
+    def discover_key_models(
+        self,
+        key_id: int,
+        progress: JobProgress | None = None,
+    ) -> dict[str, Any]:
+        bindings = [binding for binding in self.db.list_bindings(key_id) if binding["supported"]]
+        if progress:
+            progress.set_total(len(bindings))
+        results: list[dict[str, Any]] = []
+        for binding in bindings:
+            label = binding.get("label") or binding.get("adapter_type") or ""
+            if progress:
+                progress.step(f"刷新模型列表 · {label}", increment=0)
+            try:
+                results.append(self.rediscover_binding(binding["id"]))
+            except Exception as exc:
+                results.append({"binding_id": binding["id"], "status": "error", "error": str(exc)})
+            if progress:
+                progress.step(f"已刷新 · {label}")
+        return {"key_id": key_id, "discovered": results, "key": self.db.get_key(key_id)}
 
 
 class JobProgress:
@@ -3408,7 +3861,7 @@ APP = RelayManagerApp(DB_PATH)
 
 
 class RelayRequestHandler(BaseHTTPRequestHandler):
-    server_version = "RelayManager/0.3"
+    server_version = "RelayManager/0.4"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -3433,6 +3886,9 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/keys":
             self._send_json(APP.db.list_keys())
+            return
+        if path == "/api/protocols":
+            self._send_json(PROTOCOLS)
             return
         if path == "/api/bindings":
             query = parse_qs(parsed.query)
@@ -3496,13 +3952,17 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(APP.db.create_station(self._validate_station_payload(payload)), HTTPStatus.CREATED)
                 return
             if path == "/api/keys":
+                selected_protocols = parse_selected_protocols(payload)
+                if not selected_protocols:
+                    raise RelayError("at least one protocol is required")
                 key = APP.db.create_key(self._validate_key_payload(payload, require_api_key=True))
+                APP.db.configure_key_protocols(key["id"], selected_protocols)
                 job = APP.jobs.start(
-                    job_type="force_audit_key",
-                    title=f"新增后全量校验 Key #{key['id']}",
+                    job_type="audit_key",
+                    title=f"新增后校验 Key #{key['id']} 已选协议",
                     scope_type="key",
                     scope_id=key["id"],
-                    runner=lambda progress, key_id=key["id"]: APP.audit_key(key_id, True, progress=progress),
+                    runner=lambda progress, key_id=key["id"]: APP.audit_key(key_id, False, progress=progress),
                 )
                 self._send_json({"key": APP.db.get_key(key["id"]), "job": job}, HTTPStatus.CREATED)
                 return
@@ -3546,16 +4006,43 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
                 key_id = self._extract_int_id(path, "/api/keys/", "/force-audit")
                 job = APP.jobs.start(
                     job_type="force_audit_key",
-                    title=f"强制全量校验 Key #{key_id}",
+                    title=f"探测全部协议并校验已选协议 Key #{key_id}",
                     scope_type="key",
                     scope_id=key_id,
                     runner=lambda progress, current_key_id=key_id: APP.audit_key(current_key_id, True, progress=progress),
                 )
                 self._send_json(job, HTTPStatus.ACCEPTED)
                 return
+            if path.startswith("/api/keys/") and path.endswith("/discover"):
+                key_id = self._extract_int_id(path, "/api/keys/", "/discover")
+                job = APP.jobs.start(
+                    job_type="discover_key",
+                    title=f"刷新 Key #{key_id} 模型列表",
+                    scope_type="key",
+                    scope_id=key_id,
+                    runner=lambda progress, current_key_id=key_id: APP.discover_key_models(current_key_id, progress=progress),
+                )
+                self._send_json(job, HTTPStatus.ACCEPTED)
+                return
             if path.startswith("/api/bindings/") and path.endswith("/discover"):
                 binding_id = self._extract_int_id(path, "/api/bindings/", "/discover")
                 self._send_json(APP.rediscover_binding(binding_id))
+                return
+            if path.startswith("/api/bindings/") and path.endswith("/models/bulk"):
+                binding_id = self._extract_int_id(path, "/api/bindings/", "/models/bulk")
+                action = str(payload.get("action") or "").strip().lower()
+                if action not in {"enable", "disable"}:
+                    raise RelayError("action must be enable or disable")
+                model_ids = payload.get("model_ids")
+                if not isinstance(model_ids, list):
+                    raise RelayError("model_ids must be a list")
+                result = APP.db.update_binding_models_enabled(
+                    binding_id,
+                    model_ids,
+                    enabled=action == "enable",
+                    skip_reason=str(payload.get("skip_reason") or "user_disabled"),
+                )
+                self._send_json({**result, "detail": APP.db.get_binding_detail(binding_id)})
                 return
             if path.startswith("/api/bindings/") and path.endswith("/check"):
                 binding_id = self._extract_int_id(path, "/api/bindings/", "/check")
@@ -3598,7 +4085,14 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
                 return
             if path.startswith("/api/keys/"):
                 key_id = self._extract_int_id(path, "/api/keys/")
-                self._send_json(APP.db.update_key(key_id, self._validate_key_payload(payload, require_api_key=False)))
+                selected_protocols = parse_selected_protocols(payload)
+                if ("selected_protocols" in payload or "protocols" in payload) and not selected_protocols:
+                    raise RelayError("at least one protocol is required")
+                result = APP.db.update_key(key_id, self._validate_key_payload(payload, require_api_key=False))
+                if "selected_protocols" in payload or "protocols" in payload:
+                    APP.db.configure_key_protocols(key_id, selected_protocols)
+                    result = APP.db.get_key(key_id)
+                self._send_json(result)
                 return
             if path == "/api/settings/scheduler":
                 self._send_json(APP.db.update_scheduler_settings(payload))

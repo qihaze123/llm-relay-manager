@@ -16,6 +16,7 @@ const keyStationMeta = document.getElementById("key-station-meta");
 const keyEnabledSelect = keyForm.elements.enabled_select;
 const keyEnabledHidden = keyForm.elements.enabled;
 const keyModal = createModal(document.getElementById("key-modal"));
+const keyProtocolOptions = document.getElementById("key-protocol-options");
 
 const bindingDetailRoot = document.getElementById("binding-detail-modal");
 const bindingDetailModal = createModal(bindingDetailRoot);
@@ -26,10 +27,14 @@ const bindingDetailStats = document.getElementById("binding-detail-stats");
 const bindingDetailError = document.getElementById("binding-detail-error");
 const bindingDetailModels = document.getElementById("binding-detail-models");
 const bindingDetailRefreshBtn = document.getElementById("binding-detail-refresh");
+const bindingDetailEnableAllBtn = document.getElementById("binding-detail-enable-all");
+const bindingDetailDisableFailedBtn = document.getElementById("binding-detail-disable-failed");
+const bindingDetailCheckEnabledBtn = document.getElementById("binding-detail-check-enabled");
 
 let stations = [];
 let keys = [];
 let bindings = [];
+let protocols = [];
 let activeJob = null;
 let bindingDetailState = {
   bindingId: null,
@@ -87,6 +92,33 @@ function resetKeyForm(stationId = "") {
   keyEnabledSelect.value = "true";
   keyEnabledHidden.value = "true";
   setKeyFeedback("");
+  renderKeyProtocolOptions();
+}
+
+function selectedProtocolsForKey(keyId) {
+  return keyBindings(keyId).map((row) => row.adapter_type);
+}
+
+function renderKeyProtocolOptions(selected = []) {
+  if (!keyProtocolOptions) return;
+  const selectedSet = new Set(selected);
+  keyProtocolOptions.innerHTML = protocols.length
+    ? protocols
+        .map((protocol) => {
+          const checked = selectedSet.size ? selectedSet.has(protocol.adapter_type) : protocol.adapter_type === "codex_responses";
+          return `
+            <label class="protocol-option">
+              <input type="checkbox" name="selected_protocols" value="${escapeHtml(protocol.adapter_type)}" ${checked ? "checked" : ""}>
+              <span>${escapeHtml(protocol.label)}</span>
+            </label>
+          `;
+        })
+        .join("")
+    : `<span class="chip">协议列表加载中…</span>`;
+}
+
+function collectSelectedProtocols() {
+  return Array.from(keyForm.querySelectorAll('input[name="selected_protocols"]:checked')).map((input) => input.value);
 }
 
 function findStation(stationId) {
@@ -122,6 +154,19 @@ function stationStats(stationId) {
     },
     { keyCount: 0, enabledKeyCount: 0, supportedBindings: 0, bindingCount: 0, availableModels: 0 }
   );
+}
+
+function stationAvailableProtocolSummary(stationId) {
+  const keyIds = new Set(stationKeys(stationId).map((row) => row.id));
+  const summary = new Map();
+  bindings.forEach((binding) => {
+    if (!keyIds.has(binding.key_id)) return;
+    const available = Number(binding.available_model_count || 0);
+    if (available <= 0) return;
+    const label = binding.label || binding.adapter_type || "协议";
+    summary.set(label, (summary.get(label) || 0) + available);
+  });
+  return Array.from(summary.entries()).sort((a, b) => b[1] - a[1]);
 }
 
 function badgeToneForStatus(value) {
@@ -227,10 +272,9 @@ function renderKeyCard(key) {
         </div>
         <div class="key-card-side">
           ${renderInlineJob(activeJob, key.id)}
-          <div class="actions">
-            <button type="button" class="button small" data-action="detect-key" data-key-id="${key.id}">探测协议</button>
-            <button type="button" class="button small" data-action="audit-key" data-key-id="${key.id}">全量校验</button>
-            <button type="button" class="button small" data-action="force-audit-key" data-key-id="${key.id}">强制校验</button>
+          <div class="actions key-actions">
+            <button type="button" class="button small" data-action="audit-key" data-key-id="${key.id}" data-tip="只针对这个 Key 已选协议：先发现模型，再检测启用模型。">检测已选协议</button>
+            <button type="button" class="button small ghost" data-action="force-audit-key" data-key-id="${key.id}" data-tip="探测平台内全部协议，但不会自动选中未选择协议；随后只检测已选协议的启用模型。">探测所有协议</button>
             <button type="button" class="button small" data-action="edit-key" data-key-id="${key.id}">编辑</button>
             <button type="button" class="button small danger" data-action="delete-key" data-key-id="${key.id}">删除</button>
           </div>
@@ -243,6 +287,7 @@ function renderKeyCard(key) {
 
 function renderStationCard(station) {
   const stats = stationStats(station.id);
+  const availableProtocols = stationAvailableProtocolSummary(station.id);
   const expanded = expandedStationIds.has(station.id);
   const rows = stationKeys(station.id);
   const keyMarkup = rows.length
@@ -273,6 +318,11 @@ function renderStationCard(station) {
             <p class="station-card-url"><code>${escapeHtml(station.base_url)}</code></p>
           </div>
           ${metaParts.length ? `<div class="station-card-meta">${metaParts.map((p) => `<span>${p}</span>`).join('<span style="opacity:.3">|</span>')}</div>` : ""}
+          <div class="station-available-protocols">
+            ${availableProtocols.length
+              ? availableProtocols.map(([label, count]) => `<span class="available-protocol-chip"><strong>${escapeHtml(label)}</strong>${count}</span>`).join("")
+              : `<span class="available-protocol-empty">暂无可用模型</span>`}
+          </div>
         </div>
         <div class="station-card-stats">
           <div class="station-stat">
@@ -346,14 +396,16 @@ function renderStations() {
 }
 
 async function refreshAll() {
-  const [stationRows, keyRows, bindingRows] = await Promise.all([
+  const [stationRows, keyRows, bindingRows, protocolRows] = await Promise.all([
     request("/api/stations"),
     request("/api/keys"),
     request("/api/bindings"),
+    request("/api/protocols"),
   ]);
   stations = stationRows;
   keys = keyRows;
   bindings = bindingRows;
+  protocols = protocolRows;
   renderStations();
 }
 
@@ -375,6 +427,9 @@ function validateKeyPayload(payload, isEdit) {
   }
   if (!isEdit && !String(payload.api_key || "").trim()) {
     return "新增 Key 时必须填写 API Key。";
+  }
+  if (!Array.isArray(payload.selected_protocols) || payload.selected_protocols.length === 0) {
+    return "请至少选择一个协议。";
   }
   return validateProxyUrl(payload.proxy_url);
 }
@@ -438,6 +493,7 @@ function openEditKeyModal(key) {
   keyForm.elements.notes.value = key.notes || "";
   keyEnabledSelect.value = key.enabled ? "true" : "false";
   keyEnabledHidden.value = key.enabled ? "true" : "false";
+  renderKeyProtocolOptions(selectedProtocolsForKey(key.id));
   keyModal.open({
     title: `编辑 Key #${key.id}`,
     subtitle: "保持所属站点不变，在当前站点下更新 Key 配置。",
@@ -447,6 +503,8 @@ function openEditKeyModal(key) {
 function renderBindingStats(summary) {
   const cards = [
     ["模型总数", summary.model_count],
+    ["启用", summary.enabled_count],
+    ["禁用", summary.disabled_count],
     ["已检查", summary.checked_count],
     ["可用", summary.available_count],
     ["部分可用", summary.partial_count],
@@ -491,37 +549,58 @@ function renderBindingDetail(data) {
   bindingDetailModels.innerHTML = models.length
     ? models
         .map(
-          (row) => `
-            <tr>
+          (row) => {
+            const enabled = row.enabled !== 0;
+            const isPending = bindingDetailState.pendingModelId === row.model_id;
+            const statusLabel = row.status || "unchecked";
+            const noteText = row.error || row.preview || "-";
+            return `
+            <tr class="${enabled ? "" : "is-disabled"}">
               <td>
                 <div class="binding-model-id">
                   <strong>${escapeHtml(row.model_id)}</strong>
                   <span>来源 ${escapeHtml(row.source || "-")}</span>
                 </div>
               </td>
-              <td>${statusBadge(row.status || "unchecked", badgeToneForStatus(row.status))}</td>
-              <td>${availabilityBadge(row.available == null ? null : Boolean(row.available))}</td>
+              <td>${statusBadge(enabled ? "启用" : "禁用", enabled ? "ok" : "neutral")}</td>
+              <td>
+                <div class="binding-result-cell">
+                  ${statusBadge(statusLabel, badgeToneForStatus(row.status))}
+                  ${availabilityBadge(row.available == null ? null : Boolean(row.available))}
+                </div>
+              </td>
               <td>${escapeHtml(formatLatency(row.latency_ms))}</td>
               <td>${escapeHtml(formatDate(row.checked_at))}</td>
-              <td class="cell-preview">${escapeHtml(row.preview || "-")}</td>
-              <td class="cell-error">${escapeHtml(row.error || "-")}</td>
-              <td>
+              <td class="binding-note-cell" data-tip="${escapeHtml(noteText)}">${escapeHtml(noteText)}</td>
+              <td class="binding-row-actions">
                 <button
                   type="button"
                   class="button small"
                   data-action="check-single-model"
                   data-binding-id="${binding.id}"
                   data-model-id="${escapeHtml(row.model_id)}"
+                  ${bindingDetailState.pendingModelId || !enabled ? "disabled" : ""}
+                >
+                  ${isPending ? "检测中…" : "检测此模型"}
+                </button>
+                <button
+                  type="button"
+                  class="button small ghost"
+                  data-action="toggle-model-enabled"
+                  data-binding-id="${binding.id}"
+                  data-model-id="${escapeHtml(row.model_id)}"
+                  data-enabled="${enabled ? "0" : "1"}"
                   ${bindingDetailState.pendingModelId ? "disabled" : ""}
                 >
-                  ${bindingDetailState.pendingModelId === row.model_id ? "检测中…" : "检测此模型"}
+                  ${enabled ? "禁用" : "启用"}
                 </button>
               </td>
             </tr>
-          `
+          `;
+          }
         )
         .join("")
-    : `<tr><td colspan="8" class="binding-empty">这个协议暂时没有模型。</td></tr>`;
+    : `<tr><td colspan="7" class="binding-empty">这个协议暂时没有模型。</td></tr>`;
 }
 
 async function openBindingDetail(bindingId) {
@@ -534,7 +613,7 @@ async function openBindingDetail(bindingId) {
   bindingDetailMeta.innerHTML = `<span class="chip">正在加载模型详情…</span>`;
   bindingDetailStats.innerHTML = "";
   bindingDetailError.hidden = true;
-  bindingDetailModels.innerHTML = `<tr><td colspan="8" class="binding-empty">正在加载…</td></tr>`;
+  bindingDetailModels.innerHTML = `<tr><td colspan="7" class="binding-empty">正在加载…</td></tr>`;
   bindingDetailState.bindingId = bindingId;
   bindingDetailState.keyId = binding.key_id;
   bindingDetailState.detailData = null;
@@ -543,8 +622,18 @@ async function openBindingDetail(bindingId) {
     const detail = await request(`/api/bindings/${bindingId}/models`);
     renderBindingDetail(detail);
   } catch (error) {
-    bindingDetailModels.innerHTML = `<tr><td colspan="8" class="binding-empty">${escapeHtml(error.message)}</td></tr>`;
+    bindingDetailModels.innerHTML = `<tr><td colspan="7" class="binding-empty">${escapeHtml(error.message)}</td></tr>`;
   }
+}
+
+async function updateBindingModelsEnabled(bindingId, modelIds, enabled, skipReason = "user_disabled") {
+  const result = await request(`/api/bindings/${bindingId}/models/bulk`, {
+    method: "POST",
+    body: JSON.stringify({ action: enabled ? "enable" : "disable", model_ids: modelIds, skip_reason: skipReason }),
+  });
+  renderBindingDetail(result.detail);
+  await refreshAll();
+  return result;
 }
 
 async function refreshBindingDetailIfOpen() {
@@ -643,6 +732,7 @@ keyForm.addEventListener("submit", async (event) => {
   try {
     keyEnabledHidden.value = keyEnabledSelect.value;
     const payload = formToObject(keyForm);
+    payload.selected_protocols = collectSelectedProtocols();
     delete payload.enabled_select;
     const id = payload.id;
     const isEdit = Boolean(id);
@@ -699,6 +789,8 @@ stationsList.addEventListener("click", async (event) => {
   const stationId = Number(actionNode.dataset.stationId);
   const keyId = Number(actionNode.dataset.keyId);
   const bindingId = Number(actionNode.dataset.bindingId);
+  const openMenu = actionNode.closest("details.row-menu");
+  if (openMenu) openMenu.open = false;
 
   try {
     if (action === "toggle-keys") {
@@ -754,14 +846,6 @@ stationsList.addEventListener("click", async (event) => {
       log(pageLog, result);
       return;
     }
-    if (action === "detect-key") {
-      const job = await request(`/api/keys/${keyId}/detect`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      await trackJob(job);
-      return;
-    }
     if (action === "audit-key") {
       const job = await request(`/api/keys/${keyId}/audit`, {
         method: "POST",
@@ -776,6 +860,7 @@ stationsList.addEventListener("click", async (event) => {
         body: JSON.stringify({}),
       });
       await trackJob(job);
+      return;
     }
   } catch (error) {
     log(pageLog, error.message);
@@ -784,10 +869,92 @@ stationsList.addEventListener("click", async (event) => {
 
 bindingDetailRefreshBtn.addEventListener("click", async () => {
   if (!bindingDetailState.bindingId) return;
-  await refreshBindingDetailIfOpen();
+  bindingDetailRefreshBtn.disabled = true;
+  bindingDetailRefreshBtn.textContent = "发现中…";
+  try {
+    const result = await request(`/api/bindings/${bindingDetailState.bindingId}/discover`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    log(pageLog, result);
+    await refreshAll();
+    await refreshBindingDetailIfOpen();
+  } catch (error) {
+    log(pageLog, error.message);
+  } finally {
+    bindingDetailRefreshBtn.disabled = false;
+    bindingDetailRefreshBtn.textContent = "发现模型";
+  }
+});
+
+bindingDetailEnableAllBtn.addEventListener("click", async () => {
+  const detail = bindingDetailState.detailData;
+  if (!detail || !bindingDetailState.bindingId) return;
+  const disabledModels = detail.models.filter((row) => row.enabled === 0).map((row) => row.model_id);
+  if (!disabledModels.length) return;
+  await updateBindingModelsEnabled(bindingDetailState.bindingId, disabledModels, true);
+});
+
+bindingDetailDisableFailedBtn.addEventListener("click", async () => {
+  const detail = bindingDetailState.detailData;
+  if (!detail || !bindingDetailState.bindingId) return;
+  const failedModels = detail.models
+    .filter((row) => row.enabled !== 0 && ["error", "unsupported", "empty"].includes(row.status || ""))
+    .map((row) => row.model_id);
+  if (!failedModels.length) {
+    log(pageLog, "没有可禁用的失败模型。失败模型指当前状态为 error / unsupported / empty 的启用模型。");
+    return;
+  }
+  if (!window.confirm(`禁用 ${failedModels.length} 个失败/不支持模型？后续自动检测会跳过它们。`)) return;
+  await updateBindingModelsEnabled(bindingDetailState.bindingId, failedModels, false, "disabled_failed_models");
+});
+
+bindingDetailCheckEnabledBtn.addEventListener("click", async () => {
+  const detail = bindingDetailState.detailData;
+  if (!detail || !bindingDetailState.bindingId || bindingDetailState.pendingModelId) return;
+  const enabledCount = detail.models.filter((row) => row.enabled !== 0).length;
+  if (!enabledCount) {
+    log(pageLog, "当前协议没有启用模型可检测。");
+    return;
+  }
+  if (!window.confirm(`检测当前协议下 ${enabledCount} 个启用模型？禁用模型会跳过。`)) return;
+  const originalText = bindingDetailCheckEnabledBtn.textContent;
+  try {
+    bindingDetailState.pendingModelId = "__enabled_models__";
+    rerenderBindingDetailWithPendingState();
+    bindingDetailCheckEnabledBtn.disabled = true;
+    bindingDetailCheckEnabledBtn.textContent = "检测中…";
+    const job = await request(`/api/bindings/${bindingDetailState.bindingId}/check`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    await trackJob(job);
+  } catch (error) {
+    log(pageLog, error.message);
+  } finally {
+    bindingDetailState.pendingModelId = "";
+    bindingDetailCheckEnabledBtn.disabled = false;
+    bindingDetailCheckEnabledBtn.textContent = originalText || "检测启用模型";
+    rerenderBindingDetailWithPendingState();
+    await refreshBindingDetailIfOpen();
+  }
 });
 
 bindingDetailModels.addEventListener("click", async (event) => {
+  const toggleButton = event.target.closest("button[data-action='toggle-model-enabled']");
+  if (toggleButton) {
+    const bindingId = Number(toggleButton.dataset.bindingId);
+    const modelId = String(toggleButton.dataset.modelId || "").trim();
+    const enabled = toggleButton.dataset.enabled === "1";
+    if (!bindingId || !modelId) return;
+    try {
+      await updateBindingModelsEnabled(bindingId, [modelId], enabled);
+    } catch (error) {
+      log(pageLog, error.message);
+    }
+    return;
+  }
+
   const button = event.target.closest("button[data-action='check-single-model']");
   if (!button) return;
   if (bindingDetailState.pendingModelId) return;
@@ -824,3 +991,9 @@ resetStationForm();
 resetKeyForm();
 activeJob = null;
 refreshAll().catch((error) => log(pageLog, error.message));
+
+document.addEventListener("click", (event) => {
+  document.querySelectorAll("details.row-menu[open]").forEach((node) => {
+    if (!node.contains(event.target)) node.open = false;
+  });
+});

@@ -174,6 +174,10 @@
                 <span>种子模型</span>
                 <textarea name="seed_models" rows="4" placeholder="协议无法列模型时可手填，每行一个。"></textarea>
               </label>
+              <fieldset class="full-span fieldset-throttle">
+                <legend>协议</legend>
+                <div id="key-protocol-options" class="protocol-options"></div>
+              </fieldset>
               <label class="full-span">
                 <span>备注</span>
                 <textarea name="notes" rows="3" placeholder="可选"></textarea>
@@ -216,7 +220,10 @@
                 <p>优先对单个模型做检查，避免一次性扫全量模型给中转站造成异常流量特征。</p>
               </div>
               <div class="binding-models-actions">
-                <button type="button" id="binding-detail-refresh" class="button">刷新详情</button>
+                <button type="button" id="binding-detail-enable-all" class="button small ghost">全部启用</button>
+                <button type="button" id="binding-detail-disable-failed" class="button small ghost" title="禁用当前状态为 error / unsupported / empty 的启用模型，后续自动检测会跳过。">禁用失败模型</button>
+                <button type="button" id="binding-detail-check-enabled" class="button small primary" title="只检测当前协议下处于启用状态的模型，禁用模型会跳过。">检测启用模型</button>
+                <button type="button" id="binding-detail-refresh" class="button" title="重新请求中转站模型列表，并保留已有启用/禁用设置。">发现模型</button>
               </div>
             </div>
             <div class="binding-model-table-wrap">
@@ -224,12 +231,11 @@
                 <thead>
                   <tr>
                     <th>模型</th>
-                    <th>状态</th>
-                    <th>可用</th>
+                    <th>启用</th>
+                    <th>结果</th>
                     <th>延迟</th>
                     <th>最近检查</th>
-                    <th>摘要</th>
-                    <th>错误</th>
+                    <th>备注</th>
                     <th>操作</th>
                   </tr>
                 </thead>

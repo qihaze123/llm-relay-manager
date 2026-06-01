@@ -99,7 +99,7 @@ window.RelayCommon = {
     };
     document.querySelectorAll("[data-nav]").forEach((node) => {
       const key = node.dataset.nav;
-      if (hints[key]) node.setAttribute("title", hints[key]);
+      if (hints[key]) node.setAttribute("data-tip", hints[key]);
       if (key === page) node.classList.add("active");
     });
   },
@@ -136,3 +136,60 @@ window.RelayCommon = {
 };
 
 window.RelayCommon.activateNav();
+
+(function installHoverTip() {
+  let tipEl = null;
+  const ensure = () => {
+    if (!tipEl) {
+      tipEl = document.createElement("div");
+      tipEl.className = "hover-tip";
+      tipEl.hidden = true;
+      document.body.appendChild(tipEl);
+    }
+    return tipEl;
+  };
+  const show = (target) => {
+    const text = target.getAttribute("data-tip");
+    if (!text) return;
+    const el = ensure();
+    el.textContent = text;
+    el.hidden = false;
+    const rect = target.getBoundingClientRect();
+    const tipRect = el.getBoundingClientRect();
+    const margin = 8;
+    const placeRight = target.closest(".sidebar") !== null;
+    let top;
+    let left;
+    if (placeRight) {
+      top = rect.top + rect.height / 2 - tipRect.height / 2;
+      top = Math.max(margin, Math.min(top, window.innerHeight - tipRect.height - margin));
+      left = rect.right + 8;
+      if (left + tipRect.width + margin > window.innerWidth) {
+        left = Math.max(margin, rect.left - tipRect.width - 8);
+      }
+    } else {
+      top = rect.bottom + 6;
+      if (top + tipRect.height + margin > window.innerHeight) {
+        top = Math.max(margin, rect.top - tipRect.height - 6);
+      }
+      left = rect.left;
+      if (left + tipRect.width + margin > window.innerWidth) {
+        left = Math.max(margin, window.innerWidth - tipRect.width - margin);
+      }
+    }
+    el.style.top = `${top}px`;
+    el.style.left = `${left}px`;
+  };
+  const hide = () => {
+    if (tipEl) tipEl.hidden = true;
+  };
+  document.addEventListener("mouseover", (event) => {
+    const el = event.target.closest("[data-tip]");
+    if (el) show(el);
+  });
+  document.addEventListener("mouseout", (event) => {
+    const el = event.target.closest("[data-tip]");
+    if (el && !el.contains(event.relatedTarget)) hide();
+  });
+  window.addEventListener("scroll", hide, true);
+})();

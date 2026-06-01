@@ -72,6 +72,14 @@
                   <option value="unchecked">未检查</option>
                 </select>
               </label>
+              <label>
+                <span>模型启用</span>
+                <select name="enabled">
+                  <option value="">全部</option>
+                  <option value="1">已启用</option>
+                  <option value="0">已禁用</option>
+                </select>
+              </label>
               <button type="button" id="reset-search-btn" class="button small ghost">重置</button>
             </div>
 
@@ -145,6 +153,7 @@
                   <th><button type="button" class="table-sort" data-sort="station_name">站点</button></th>
                   <th><button type="button" class="table-sort" data-sort="key_name">Key</button></th>
                   <th><button type="button" class="table-sort" data-sort="protocol_label">协议</button></th>
+                  <th><button type="button" class="table-sort" data-sort="model_enabled">启用</button></th>
                   <th><button type="button" class="table-sort" data-sort="supported">支持</button></th>
                   <th><button type="button" class="table-sort" data-sort="status">状态</button></th>
                   <th><button type="button" class="table-sort" data-sort="available">可用</button></th>

@@ -13,10 +13,12 @@ const keySearch = document.getElementById("key-search");
 const keyEnabledSelect = keyForm.elements.enabled_select;
 const keyEnabledHidden = keyForm.elements.enabled;
 const keyModal = createModal(document.getElementById("key-modal"));
+const keyProtocolOptions = document.getElementById("key-protocol-options");
 
 let stations = [];
 let keys = [];
 let bindings = [];
+let protocols = [];
 
 function setFormFeedback(message, type = "") {
   if (!message) {
@@ -38,6 +40,37 @@ function resetForm() {
   keyForm.elements.timeout_seconds.value = 30;
   keyEnabledSelect.value = "true";
   keyEnabledHidden.value = "true";
+  renderKeyProtocolOptions();
+}
+
+function keyBindings(keyId) {
+  return bindings.filter((row) => Number(row.key_id) === Number(keyId));
+}
+
+function selectedProtocolsForKey(keyId) {
+  return keyBindings(keyId).map((row) => row.adapter_type);
+}
+
+function renderKeyProtocolOptions(selected = []) {
+  if (!keyProtocolOptions) return;
+  const selectedSet = new Set(selected);
+  keyProtocolOptions.innerHTML = protocols.length
+    ? protocols
+        .map((protocol) => {
+          const checked = selectedSet.size ? selectedSet.has(protocol.adapter_type) : protocol.adapter_type === "codex_responses";
+          return `
+            <label class="protocol-option">
+              <input type="checkbox" name="selected_protocols" value="${escapeHtml(protocol.adapter_type)}" ${checked ? "checked" : ""}>
+              <span>${escapeHtml(protocol.label)}</span>
+            </label>
+          `;
+        })
+        .join("")
+    : `<span class="chip">协议列表加载中…</span>`;
+}
+
+function collectSelectedProtocols() {
+  return Array.from(keyForm.querySelectorAll('input[name="selected_protocols"]:checked')).map((input) => input.value);
 }
 
 function openCreateModal() {
@@ -62,6 +95,7 @@ function openEditModal(item) {
   keyForm.elements.notes.value = item.notes || "";
   keyEnabledSelect.value = item.enabled ? "true" : "false";
   keyEnabledHidden.value = item.enabled ? "true" : "false";
+  renderKeyProtocolOptions(selectedProtocolsForKey(item.id));
   keyModal.open({
     title: `编辑 Key #${item.id}`,
     subtitle: "在全局运维页更新 Key 的所属站点、网络策略和检测配置。",
@@ -117,11 +151,17 @@ function renderKeys() {
               <td>${row.supported_binding_count || 0}/${row.binding_count || 0}</td>
               <td>${row.available_model_count || 0}</td>
               <td class="actions compact-actions">
-                <button class="icon-btn" data-entity="key" data-action="detect" data-id="${row.id}" title="探测协议">🔍</button>
-                <button class="icon-btn" data-entity="key" data-action="audit" data-id="${row.id}" title="全量校验">✓</button>
-                <button class="icon-btn" data-entity="key" data-action="force-audit" data-id="${row.id}" title="强制全量校验">⟳</button>
-                <button class="icon-btn" data-entity="key" data-action="edit" data-id="${row.id}" title="编辑">✎</button>
-                <button class="icon-btn danger" data-entity="key" data-action="delete" data-id="${row.id}" title="删除">✕</button>
+                <button class="button small" data-entity="key" data-action="audit" data-id="${row.id}" data-tip="只跑该 Key 已支持的协议，做一轮模型发现 + 可用性检查">刷新</button>
+                <button class="button small ghost" data-entity="key" data-action="force-audit" data-id="${row.id}" data-tip="包括尚未支持的协议也重跑一遍，耗时较久">深度重测</button>
+                <details class="row-menu">
+                  <summary class="icon-btn" aria-label="更多操作">⋯</summary>
+                  <div class="row-menu-pop">
+                    <button data-entity="key" data-action="discover" data-id="${row.id}">仅刷新模型列表</button>
+                    <button data-entity="key" data-action="detect" data-id="${row.id}">仅探测协议</button>
+                    <button data-entity="key" data-action="edit" data-id="${row.id}">编辑</button>
+                    <button class="danger" data-entity="key" data-action="delete" data-id="${row.id}">删除</button>
+                  </div>
+                </details>
               </td>
             </tr>
           `
@@ -170,6 +210,9 @@ function validateKeyPayload(payload, isEdit) {
   if (!isEdit && !String(payload.api_key || "").trim()) {
     return "新增 Key 时必须填写 API Key。";
   }
+  if (!Array.isArray(payload.selected_protocols) || payload.selected_protocols.length === 0) {
+    return "请至少选择一个协议。";
+  }
   if (
     payload.proxy_url &&
     !String(payload.proxy_url).trim().startsWith("http://") &&
@@ -183,11 +226,13 @@ function validateKeyPayload(payload, isEdit) {
 }
 
 async function refreshAll() {
-  const [stationRows, keyRows, bindingRows] = await Promise.all([
+  const [stationRows, keyRows, bindingRows, protocolRows] = await Promise.all([
     request("/api/stations"),
     request("/api/keys"),
     request("/api/bindings"),
+    request("/api/protocols"),
   ]);
+  protocols = protocolRows;
   renderStationOptions(stationRows);
   keys = keyRows;
   renderKeys();
@@ -233,6 +278,7 @@ keyForm.addEventListener("submit", async (event) => {
   try {
     keyEnabledHidden.value = keyEnabledSelect.value;
     const payload = formToObject(keyForm);
+    payload.selected_protocols = collectSelectedProtocols();
     delete payload.enabled_select;
     const id = payload.id;
     const isEdit = Boolean(id);
@@ -267,6 +313,8 @@ keysTable.addEventListener("click", async (event) => {
   if (!target) return;
   const action = target.dataset.action;
   const id = Number(target.dataset.id);
+  const openMenu = target.closest("details.row-menu");
+  if (openMenu) openMenu.open = false;
   const item = keys.find((row) => row.id === id);
   if (!item) return;
   try {
@@ -299,6 +347,13 @@ keysTable.addEventListener("click", async (event) => {
     }
     if (action === "force-audit") {
       const job = await request(`/api/keys/${id}/force-audit`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      await trackJob(job);
+    }
+    if (action === "discover") {
+      const job = await request(`/api/keys/${id}/discover`, {
         method: "POST",
         body: JSON.stringify({}),
       });
@@ -341,3 +396,9 @@ keyEnabledSelect.addEventListener("change", () => {
 
 resetForm();
 refreshAll().catch((error) => log(pageLog, error.message));
+
+document.addEventListener("click", (event) => {
+  document.querySelectorAll("details.row-menu[open]").forEach((node) => {
+    if (!node.contains(event.target)) node.open = false;
+  });
+});
