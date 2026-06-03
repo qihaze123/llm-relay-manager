@@ -676,13 +676,14 @@ class OpenAIResponsesAdapter(BaseAdapter):
 
 class CodexResponsesAdapter(OpenAIResponsesAdapter):
     adapter_type = "codex_responses"
+    codex_version = "0.136.0"
 
     @staticmethod
     def _codex_instructions() -> str:
         return (
-            "You are a coding agent running in the Codex CLI, a terminal-based coding assistant. "
-            "Codex CLI is an open source project led by OpenAI. You are expected to be precise, "
-            "safe, and helpful. Reply concisely to the user's probe."
+            "You are Codex, a coding agent based on GPT-5. "
+            "You are expected to be precise, safe, and helpful. "
+            "Reply concisely to the user's probe."
         )
 
     @staticmethod
@@ -695,24 +696,46 @@ class CodexResponsesAdapter(OpenAIResponsesAdapter):
             "</permissions instructions>"
         )
 
+    @staticmethod
+    def _codex_installation_id() -> str:
+        try:
+            installation_id = (Path.home() / ".codex" / "installation_id").read_text().strip()
+            if installation_id:
+                return installation_id
+        except OSError:
+            pass
+        return str(uuid4())
+
     def test_model(self, model_id: str) -> CheckResult:
         conversation_id = str(uuid4())
         turn_id = str(uuid4())
+        window_id = f"{conversation_id}:0"
+        turn_metadata = {
+            "session_id": conversation_id,
+            "thread_id": conversation_id,
+            "thread_source": "user",
+            "turn_id": turn_id,
+            "workspaces": {},
+            "sandbox": "none",
+            "turn_started_at_unix_ms": int(time.time() * 1000),
+            "request_kind": "turn",
+            "window_id": window_id,
+        }
         url = f"{openai_api_root(self.key_record['base_url'])}/responses"
         headers = {
             "Authorization": f"Bearer {self.key_record['api_key']}",
             "originator": "Codex Desktop",
-            "User-Agent": "Codex Desktop/0.117.0 (Mac OS; arm64) Apple_Terminal (codex-exec; 0.117.0)",
-            "x-client-request-id": conversation_id,
-            "session_id": conversation_id,
-            "x-codex-turn-metadata": json.dumps(
-                {
-                    "session_id": conversation_id,
-                    "turn_id": turn_id,
-                    "sandbox": "none",
-                },
-                separators=(",", ":"),
+            "User-Agent": (
+                f"Codex Desktop/{self.codex_version} "
+                f"(Mac OS 15.5.0; arm64) Apple_Terminal/455.1 "
+                f"(codex_exec; {self.codex_version})"
             ),
+            "x-codex-beta-features": "terminal_resize_reflow",
+            "x-codex-window-id": window_id,
+            "x-client-request-id": conversation_id,
+            "session-id": conversation_id,
+            "thread-id": conversation_id,
+            "x-codex-turn-metadata": json.dumps(turn_metadata, separators=(",", ":")),
         }
         payload = {
             "model": model_id,
@@ -731,13 +754,15 @@ class CodexResponsesAdapter(OpenAIResponsesAdapter):
             ],
             "tools": [],
             "tool_choice": "auto",
-            "parallel_tool_calls": False,
-            "reasoning": {"effort": "high", "summary": "auto"},
+            "parallel_tool_calls": True,
+            "reasoning": {"effort": "high"},
             "store": False,
             "stream": True,
             "include": ["reasoning.encrypted_content"],
             "service_tier": "priority",
             "prompt_cache_key": conversation_id,
+            "text": {"verbosity": "low"},
+            "client_metadata": {"x-codex-installation-id": self._codex_installation_id()},
         }
         return _time_and_parse_openai_stream(
             self,
