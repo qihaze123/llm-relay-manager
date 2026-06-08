@@ -361,6 +361,23 @@ class RelayError(Exception):
     pass
 
 
+INTERNAL_ERROR_MESSAGES = {
+    "missing HTTP status marker": "检测请求缺少 HTTP 状态标记",
+    "unexpected /models response": "模型列表响应格式异常",
+    "retry runner failed without result": "重试执行未返回结果",
+    "missing_result": "检测未返回结果",
+    "unexpected_output": "探针返回内容不符合预期",
+    "reasoning_only": "仅返回推理内容，未返回最终文本",
+    "model skipped by protocol profile": "模型不匹配当前协议",
+    "station in cooldown": "站点处于限流冷却中",
+}
+
+
+def localize_internal_error(error_text: str | None) -> str:
+    text = str(error_text or "").strip()
+    return INTERNAL_ERROR_MESSAGES.get(text, text)
+
+
 def curl_json(
     method: str,
     url: str,
@@ -401,7 +418,7 @@ def curl_json(
         raise RelayError(proc.stderr.strip() or "curl failed")
     marker = "\n__STATUS__:"
     if marker not in proc.stdout:
-        raise RelayError("missing HTTP status marker")
+        raise RelayError(localize_internal_error("missing HTTP status marker"))
     body, status_raw = proc.stdout.rsplit(marker, 1)
     status_code = int(status_raw.strip())
     body = body.strip()
@@ -453,7 +470,7 @@ def curl_raw(
         raise RelayError(proc.stderr.strip() or "curl failed")
     marker = "\n__STATUS__:"
     if marker not in proc.stdout:
-        raise RelayError("missing HTTP status marker")
+        raise RelayError(localize_internal_error("missing HTTP status marker"))
     body, status_raw = proc.stdout.rsplit(marker, 1)
     return int(status_raw.strip()), body.strip()
 
@@ -651,7 +668,7 @@ class OpenAIChatAdapter(BaseAdapter):
         if status_code >= 400:
             raise RelayError(_extract_error(parsed) or f"HTTP {status_code}")
         if not isinstance(parsed, dict):
-            raise RelayError("unexpected /models response")
+            raise RelayError(localize_internal_error("unexpected /models response"))
         return [item.get("id") for item in parsed.get("data", []) if item.get("id")]
 
     def test_model(self, model_id: str) -> CheckResult:
@@ -815,14 +832,14 @@ class AnthropicMessagesAdapter(BaseAdapter):
                 "Authorization": f"Bearer {self.key_record['api_key']}",
             },
         ]
-        last_error = "unexpected /models response"
+        last_error = localize_internal_error("unexpected /models response")
         for headers in header_candidates:
             status_code, parsed, _route = self.request_json("GET", url, headers=headers)
             if status_code >= 400:
                 last_error = _extract_error(parsed) or f"HTTP {status_code}"
                 continue
             if not isinstance(parsed, dict):
-                last_error = "unexpected /models response"
+                last_error = localize_internal_error("unexpected /models response")
                 continue
             return [item.get("id") for item in parsed.get("data", []) if item.get("id")]
         raise RelayError(last_error)
@@ -870,7 +887,7 @@ class GeminiGenerateContentAdapter(BaseAdapter):
         if status_code >= 400:
             raise RelayError(_extract_error(parsed) or f"HTTP {status_code}")
         if not isinstance(parsed, dict):
-            raise RelayError("unexpected /models response")
+            raise RelayError(localize_internal_error("unexpected /models response"))
         models = []
         for item in parsed.get("models", []):
             name = item.get("name")
@@ -1234,7 +1251,7 @@ def run_with_retries(fn: Any, attempts: int) -> Any:
             time.sleep(RETRY_BACKOFF_SECONDS * (index + 1))
     if last_error:
         raise last_error
-    raise RelayError("retry runner failed without result")
+    raise RelayError(localize_internal_error("retry runner failed without result"))
 
 
 def test_model_with_retries(adapter: BaseAdapter, model_id: str, attempts: int) -> CheckResult:
@@ -1250,7 +1267,7 @@ def test_model_with_retries(adapter: BaseAdapter, model_id: str, attempts: int) 
         if not should_retry_result(result) or index + 1 >= max(1, attempts):
             return result
         time.sleep(RETRY_BACKOFF_SECONDS * (index + 1))
-    return last_result or CheckResult("error", False, 0, "", "", "missing_result")
+    return last_result or CheckResult("error", False, 0, "", "", localize_internal_error("missing_result"))
 
 
 def _time_and_parse_openai(
@@ -1300,10 +1317,10 @@ def _time_and_parse_openai(
     if text:
         if reply_matches_probe_expectation(text):
             return CheckResult("ok", True, latency_ms, response_shape, text[:160], None, network_mode, route, proxy_masked)
-        return CheckResult("partial", False, latency_ms, response_shape, text[:160], "unexpected_output", network_mode, route, proxy_masked)
+        return CheckResult("partial", False, latency_ms, response_shape, text[:160], localize_internal_error("unexpected_output"), network_mode, route, proxy_masked)
     reasoning = _extract_reasoning_text(parsed)
     if reasoning:
-        return CheckResult("partial", False, latency_ms, response_shape, reasoning[:160], "reasoning_only", network_mode, route, proxy_masked)
+        return CheckResult("partial", False, latency_ms, response_shape, reasoning[:160], localize_internal_error("reasoning_only"), network_mode, route, proxy_masked)
     return CheckResult("empty", False, latency_ms, response_shape, "", _extract_error(parsed), network_mode, route, proxy_masked)
 
 
@@ -1355,7 +1372,7 @@ def _time_and_parse_openai_stream(
     if text:
         if reply_matches_probe_expectation(text):
             return CheckResult("ok", True, latency_ms, response_shape or "sse", text[:160], None, network_mode, route, proxy_masked)
-        return CheckResult("partial", False, latency_ms, response_shape or "sse", text[:160], "unexpected_output", network_mode, route, proxy_masked)
+        return CheckResult("partial", False, latency_ms, response_shape or "sse", text[:160], localize_internal_error("unexpected_output"), network_mode, route, proxy_masked)
     if error_text:
         return CheckResult("error", False, latency_ms, response_shape or "sse", "", error_text, network_mode, route, proxy_masked)
     return CheckResult("empty", False, latency_ms, response_shape or "sse", "", error_text, network_mode, route, proxy_masked)
@@ -1400,7 +1417,7 @@ def _time_and_parse_anthropic(
     if text:
         if reply_matches_probe_expectation(text):
             return CheckResult("ok", True, latency_ms, response_shape, text[:160], None, network_mode, route, proxy_url_masked if route == "proxy" else "")
-        return CheckResult("partial", False, latency_ms, response_shape, text[:160], "unexpected_output", network_mode, route, proxy_url_masked if route == "proxy" else "")
+        return CheckResult("partial", False, latency_ms, response_shape, text[:160], localize_internal_error("unexpected_output"), network_mode, route, proxy_url_masked if route == "proxy" else "")
     return CheckResult("empty", False, latency_ms, response_shape, "", _extract_error(parsed), network_mode, route, proxy_url_masked if route == "proxy" else "")
 
 
@@ -1444,7 +1461,7 @@ def _time_and_parse_gemini(
     if text:
         if reply_matches_probe_expectation(text):
             return CheckResult("ok", True, latency_ms, response_shape, text[:160], None, network_mode, route, proxy_url_masked if route == "proxy" else "")
-        return CheckResult("partial", False, latency_ms, response_shape, text[:160], "unexpected_output", network_mode, route, proxy_url_masked if route == "proxy" else "")
+        return CheckResult("partial", False, latency_ms, response_shape, text[:160], localize_internal_error("unexpected_output"), network_mode, route, proxy_url_masked if route == "proxy" else "")
     return CheckResult("empty", False, latency_ms, response_shape, "", _extract_error(parsed), network_mode, route, proxy_url_masked if route == "proxy" else "")
 
 
@@ -1771,7 +1788,64 @@ class Database:
         self.add_column_if_missing("stations", "detect_min_interval_ms", "INTEGER NOT NULL DEFAULT 1000")
         self.add_column_if_missing("stations", "detect_cooldown_seconds", "INTEGER NOT NULL DEFAULT 60")
         self.migrate_legacy_credentials()
+        self.localize_internal_error_messages()
         self.restore_transient_current_checks()
+        self.promote_latest_rate_limited_checks()
+
+    def localize_internal_error_messages(self) -> None:
+        with self.connect() as conn:
+            for raw, localized in INTERNAL_ERROR_MESSAGES.items():
+                for table in ("binding_checks", "binding_check_history"):
+                    conn.execute(
+                        f"UPDATE {table} SET error = ? WHERE error = ?",
+                        (localized, raw),
+                    )
+                conn.execute(
+                    "UPDATE protocol_bindings SET last_error = ? WHERE last_error = ?",
+                    (localized, raw),
+                )
+
+    def promote_latest_rate_limited_checks(self) -> None:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT h.binding_id, h.model_id, h.status, h.available, h.latency_ms,
+                       h.response_shape, h.preview, h.network_mode, h.network_route,
+                       h.proxy_url_masked, h.error, h.checked_at
+                FROM binding_check_history h
+                LEFT JOIN binding_checks bc
+                  ON bc.binding_id = h.binding_id
+                 AND bc.model_id = h.model_id
+                WHERE h.status = 'rate_limited'
+                  AND (bc.checked_at IS NULL OR h.checked_at > bc.checked_at)
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM binding_check_history newer
+                    WHERE newer.binding_id = h.binding_id
+                      AND newer.model_id = h.model_id
+                      AND (
+                        newer.checked_at > h.checked_at
+                        OR (newer.checked_at = h.checked_at AND newer.id > h.id)
+                      )
+                  )
+                """
+            ).fetchall()
+            for row in rows:
+                self.write_current_check_row(
+                    conn,
+                    row["binding_id"],
+                    row["model_id"],
+                    row["status"],
+                    bool(row["available"]),
+                    int(row["latency_ms"] or 0),
+                    row["response_shape"] or "",
+                    row["preview"] or "",
+                    row["network_mode"] or "",
+                    row["network_route"] or "",
+                    row["proxy_url_masked"] or "",
+                    row["error"] or "当前模型触发限流",
+                    row["checked_at"],
+                )
 
     def migrate_legacy_credentials(self) -> None:
         if not self.table_exists("credentials"):
@@ -2608,6 +2682,7 @@ class Database:
         error: str,
         checked_at: str,
     ) -> None:
+        error = localize_internal_error(error)
         conn.execute(
             """
             INSERT INTO binding_checks (
@@ -2687,6 +2762,8 @@ class Database:
         model_id: str,
         result: CheckResult,
     ) -> bool:
+        if result.status == "rate_limited":
+            return True
         if not is_transient_check_result(result):
             return True
         return not self.restore_latest_successful_current_check(conn, binding_id, model_id)
@@ -2697,7 +2774,7 @@ class Database:
                 """
                 SELECT binding_id, model_id, status, error
                 FROM binding_checks
-                WHERE available = 0 AND status IN ('error', 'rate_limited')
+                WHERE available = 0 AND status = 'error'
                 """
             ).fetchall()
             for row in rows:
@@ -2738,7 +2815,7 @@ class Database:
                     result.network_mode,
                     result.network_route,
                     result.proxy_url_masked,
-                    result.error or "",
+                    localize_internal_error(result.error or ""),
                     checked_at,
                 ),
             )
@@ -3276,7 +3353,7 @@ class RelayManagerApp:
     def build_adapter(self, adapter_type: str, key_record: dict[str, Any] | sqlite3.Row) -> BaseAdapter:
         adapter_cls = ADAPTERS.get(adapter_type)
         if not adapter_cls:
-            raise RelayError(f"unsupported adapter_type: {adapter_type}")
+            raise RelayError(f"不支持的协议类型：{adapter_type}")
         return adapter_cls(key_record)
 
     def get_throttle(self, station_id: int) -> StationThrottle:
@@ -3567,7 +3644,7 @@ class RelayManagerApp:
 
         def run_single(index: int, current_model: str) -> tuple[int, dict[str, Any]]:
             if not model_matches_protocol(binding["adapter_type"], current_model):
-                skipped_result = CheckResult("unsupported", False, 0, "", "", "model skipped by protocol profile")
+                skipped_result = CheckResult("unsupported", False, 0, "", "", localize_internal_error("model skipped by protocol profile"))
                 self.db.upsert_binding_check(binding_id, current_model, skipped_result)
                 return index, {
                     "binding_id": binding_id,
@@ -3580,7 +3657,7 @@ class RelayManagerApp:
                     "network_mode": "",
                     "network_route": "",
                     "proxy_url_masked": "",
-                    "error": "model skipped by protocol profile",
+                    "error": localize_internal_error("model skipped by protocol profile"),
                 }
             throttle.acquire()
             try:
@@ -3642,6 +3719,7 @@ class RelayManagerApp:
         last_proxy_url_masked = binding["last_proxy_url_masked"] or ""
         successful_row: dict[str, Any] | None = None
         supported_row: dict[str, Any] | None = None
+        rate_limited_row: dict[str, Any] | None = None
         rate_limited_count = 0
         for row in checks:
             result = CheckResult(
@@ -3657,6 +3735,17 @@ class RelayManagerApp:
             )
             if result.status == "rate_limited":
                 rate_limited_count += 1
+                if rate_limited_row is None:
+                    rate_limited_row = row
+                last_error = localize_internal_error(row.get("error") or "当前模型触发限流")
+                if row.get("checked_at"):
+                    last_checked_at = row["checked_at"]
+                if row.get("network_mode"):
+                    last_network_mode = row["network_mode"]
+                if row.get("network_route"):
+                    last_network_route = row["network_route"]
+                if row.get("proxy_url_masked"):
+                    last_proxy_url_masked = row["proxy_url_masked"]
                 continue
             if self.result_indicates_protocol_support(binding["adapter_type"], result):
                 supported = True
@@ -3681,16 +3770,24 @@ class RelayManagerApp:
             if row.get("proxy_url_masked"):
                 last_proxy_url_masked = row["proxy_url_masked"]
         status = "unsupported"
-        if available:
+        if rate_limited_count > 0:
+            status = "rate_limited"
+        elif available:
             status = "ok"
         elif supported:
             status = "supported"
-        elif checks and rate_limited_count == len(checks):
-            status = "rate_limited"
         elif checks:
             status = "unsupported"
 
-        if successful_row:
+        if rate_limited_row:
+            response_shape = rate_limited_row["response_shape"] or response_shape
+            preview = rate_limited_row["preview"] or preview
+            last_error = localize_internal_error(rate_limited_row["error"] or "当前模型触发限流")
+            last_checked_at = rate_limited_row["checked_at"] or last_checked_at
+            last_network_mode = rate_limited_row["network_mode"] or last_network_mode
+            last_network_route = rate_limited_row["network_route"] or last_network_route
+            last_proxy_url_masked = rate_limited_row["proxy_url_masked"] or last_proxy_url_masked
+        elif successful_row:
             response_shape = successful_row["response_shape"] or response_shape
             preview = successful_row["preview"] or preview
             last_error = ""

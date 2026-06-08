@@ -54,8 +54,24 @@ function statusBadgeClass(value, type = "status") {
   }
   if (normalized === "ok") return "ok";
   if (normalized === "partial") return "partial";
+  if (normalized === "rate_limited") return "warn";
   if (normalized === "empty" || normalized === "unchecked") return "neutral";
   return "error";
+}
+
+function statusLabel(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  const labels = {
+    ok: "可用",
+    supported: "支持",
+    partial: "部分可用",
+    empty: "空响应",
+    unchecked: "未检查",
+    error: "错误",
+    unsupported: "不支持",
+    rate_limited: "限流",
+  };
+  return labels[normalized] || value || "未检查";
 }
 
 function renderBadge(label, variant) {
@@ -95,8 +111,8 @@ function renderDetailRow(row) {
   const rate = formatRate(row.success_rate);
   const supportedLabel = row.supported ? "支持" : "不支持";
   const enabledLabel = row.model_enabled === 0 ? "禁用" : "启用";
-  const statusLabel = row.status || "unchecked";
-  const availableLabel = row.available == null ? "unchecked" : row.available ? "可用" : "不可用";
+  const rawStatus = row.status || "unchecked";
+  const availableLabel = row.available == null ? "未检查" : row.available ? "可用" : "不可用";
   return `
     <tr>
       <td><code class="clickable-cell" data-filter="q" data-value="${escapeHtml(row.model_id)}" title="点击按此模型筛选">${escapeHtml(row.model_id)}</code></td>
@@ -105,7 +121,7 @@ function renderDetailRow(row) {
       <td><a href="#" class="clickable-cell" data-filter="protocol_label" data-value="${escapeHtml(row.protocol_label)}" title="点击按此协议筛选">${escapeHtml(row.protocol_label)}</a></td>
       <td>${renderBadge(enabledLabel, row.model_enabled === 0 ? "neutral" : "ok")}</td>
       <td>${renderBadge(supportedLabel, statusBadgeClass(row.supported, "boolean"))}</td>
-      <td>${renderBadge(statusLabel, statusBadgeClass(statusLabel))}</td>
+      <td>${renderBadge(statusLabel(rawStatus), statusBadgeClass(rawStatus))}</td>
       <td>${renderBadge(availableLabel, statusBadgeClass(row.available, "boolean"))}</td>
       <td>${escapeHtml(rate)}</td>
       <td>${row.latency_ms ? `${escapeHtml(row.latency_ms)} ms` : "-"}</td>
@@ -187,8 +203,8 @@ function renderGroupRow(g) {
   if (!expanded) return head;
   const inner = g.entries.map((row) => {
     const rate2 = formatRate(row.success_rate);
-    const statusLabel = row.status || "unchecked";
-    const availableLabel = row.available == null ? "unchecked" : row.available ? "可用" : "不可用";
+    const rawStatus = row.status || "unchecked";
+    const availableLabel = row.available == null ? "未检查" : row.available ? "可用" : "不可用";
     return `
       <tr class="group-detail-row">
         <td></td>
@@ -197,7 +213,7 @@ function renderGroupRow(g) {
             <a href="#" class="clickable-cell" data-filter="station_id" data-value="${escapeHtml(row.station_id)}">${escapeHtml(row.station_name)}</a>
             · <a href="#" class="clickable-cell" data-filter="key_id" data-value="${escapeHtml(row.key_id)}">${escapeHtml(row.key_name)}</a>
             · <a href="#" class="clickable-cell" data-filter="protocol_label" data-value="${escapeHtml(row.protocol_label)}">${escapeHtml(row.protocol_label)}</a>
-            · ${renderBadge(statusLabel, statusBadgeClass(statusLabel))}
+            · ${renderBadge(statusLabel(rawStatus), statusBadgeClass(rawStatus))}
             · ${renderBadge(availableLabel, statusBadgeClass(row.available, "boolean"))}
             · 成功率 ${escapeHtml(rate2)}
             · 延迟 ${row.latency_ms ? `${row.latency_ms} ms` : "-"}

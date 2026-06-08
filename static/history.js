@@ -1,4 +1,4 @@
-const { request, renderSchedulerStatus } = window.RelayCommon;
+const { request, renderSchedulerStatus, escapeHtml } = window.RelayCommon;
 
 const schedulerForm = document.getElementById("scheduler-form");
 const schedulerStatus = document.getElementById("scheduler-status");
@@ -8,6 +8,33 @@ const runCycleBtn = document.getElementById("run-cycle-btn");
 
 let refreshTimer = 0;
 
+function statusLabel(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  const labels = {
+    ok: "可用",
+    supported: "支持",
+    partial: "部分可用",
+    empty: "空响应",
+    unchecked: "未检查",
+    error: "错误",
+    unsupported: "不支持",
+    rate_limited: "限流",
+  };
+  return labels[normalized] || value || "-";
+}
+
+function jobStatusLabel(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  const labels = {
+    queued: "排队中",
+    running: "运行中",
+    ok: "完成",
+    error: "错误",
+    interrupted: "已中断",
+  };
+  return labels[normalized] || value || "-";
+}
+
 function renderJobs(rows) {
   jobsTable.innerHTML = rows.length
     ? rows
@@ -16,11 +43,11 @@ function renderJobs(rows) {
             <tr>
               <td>${new Date(row.created_at).toLocaleString()}</td>
               <td>${row.id}</td>
-              <td>${row.title}</td>
-              <td>${row.status}</td>
+              <td>${escapeHtml(row.title)}</td>
+              <td>${escapeHtml(jobStatusLabel(row.status))}</td>
               <td>${row.total_steps ? `${row.completed_steps}/${row.total_steps} (${row.progress_percent}%)` : "-"}</td>
-              <td>${row.current_step || row.detail || "-"}</td>
-              <td>${row.error_text || "-"}</td>
+              <td>${escapeHtml(row.current_step || row.detail || "-")}</td>
+              <td>${escapeHtml(row.error_text || "-")}</td>
             </tr>
           `
         )
@@ -35,15 +62,15 @@ function renderHistory(rows) {
           (row) => `
             <tr>
               <td>${new Date(row.checked_at).toLocaleString()}</td>
-              <td><code>${row.model_id}</code></td>
-              <td>${row.station_name}</td>
-              <td>${row.key_name}</td>
-              <td>${row.protocol_label}</td>
-              <td>${row.status}</td>
+              <td><code>${escapeHtml(row.model_id)}</code></td>
+              <td>${escapeHtml(row.station_name)}</td>
+              <td>${escapeHtml(row.key_name)}</td>
+              <td>${escapeHtml(row.protocol_label)}</td>
+              <td>${escapeHtml(statusLabel(row.status))}</td>
               <td>${row.available ? "是" : "否"}</td>
-              <td>${row.network_route || "-"}${row.proxy_url_masked ? ` · <code>${row.proxy_url_masked}</code>` : ""}</td>
+              <td>${escapeHtml(row.network_route || "-")}${row.proxy_url_masked ? ` · <code>${escapeHtml(row.proxy_url_masked)}</code>` : ""}</td>
               <td>${row.latency_ms ? `${row.latency_ms} ms` : "-"}</td>
-              <td>${row.error || "-"}</td>
+              <td>${escapeHtml(row.error || "-")}</td>
             </tr>
           `
         )
