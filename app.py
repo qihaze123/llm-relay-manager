@@ -98,7 +98,9 @@ PROBE_RETRY_ATTEMPTS = 2
 CHECK_RETRY_ATTEMPTS = 2
 RETRY_BACKOFF_SECONDS = 0.8
 NETWORK_MODES = {"auto", "direct", "proxy"}
-TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
+DEFAULT_CLAUDE_CODE_CLI_VERSION = "2.1.153"
+_CLAUDE_CODE_CLI_VERSION_CACHE: str | None = None
 PROBE_NEGATIVE_KEYWORDS = ["image", "video", "audio", "veo", "mid", "seedance", "gptimage", "flux", "journey"]
 PROBE_FAMILY_KEYWORDS = {
     "openai_chat": ["gpt", "o1", "o3", "o4", "chatgpt"],
@@ -279,7 +281,30 @@ def generate_claude_code_probe_user_id() -> str:
     return f"user_{secrets.token_hex(32)}_account__session_{uuid4()}"
 
 
+def claude_code_cli_version() -> str:
+    global _CLAUDE_CODE_CLI_VERSION_CACHE
+    if _CLAUDE_CODE_CLI_VERSION_CACHE:
+        return _CLAUDE_CODE_CLI_VERSION_CACHE
+    version = DEFAULT_CLAUDE_CODE_CLI_VERSION
+    try:
+        proc = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        raw = f"{proc.stdout} {proc.stderr}"
+        match = re.search(r"\b\d+\.\d+\.\d+\b", raw)
+        if proc.returncode == 0 and match:
+            version = match.group(0)
+    except Exception:
+        pass
+    _CLAUDE_CODE_CLI_VERSION_CACHE = version
+    return version
+
+
 def claude_code_probe_headers(api_key: str, *, context_1m: bool = False) -> dict[str, str]:
+    cli_version = claude_code_cli_version()
     betas = [
         "claude-code-20250219",
         "interleaved-thinking-2025-05-14",
@@ -293,7 +318,7 @@ def claude_code_probe_headers(api_key: str, *, context_1m: bool = False) -> dict
         "anthropic-beta": ",".join(betas),
         "anthropic-dangerous-direct-browser-access": "true",
         "x-app": "cli",
-        "User-Agent": "claude-cli/2.1.74 (external, sdk-cli)",
+        "User-Agent": f"claude-cli/{cli_version} (external, sdk-cli)",
         "X-Stainless-Arch": "arm64",
         "X-Stainless-Lang": "js",
         "X-Stainless-OS": "MacOS",
@@ -1131,14 +1156,28 @@ def is_transient_error_text(error_text: str | None) -> bool:
         "bad gateway",
         "gateway timeout",
         "service unavailable",
+        "cloudflare",
+        "origin error",
+        "upstream",
         "connection reset",
+        "connection timed out",
         "ssl_connect",
         "ssl_error",
         "empty reply",
+        "unexpected html response",
+        "html response",
+        "http 408",
         "http 500",
         "http 502",
         "http 503",
         "http 504",
+        "http 520",
+        "http 521",
+        "http 522",
+        "http 523",
+        "http 524",
+        "http 525",
+        "http 526",
         "curl: (28)",
         "curl: (35)",
         "curl: (52)",
@@ -1165,6 +1204,16 @@ def is_rate_limit_error(status_code: int | None, error_text: str | None) -> bool
         return True
     lowered = str(error_text or "").strip().lower()
     return any(marker in lowered for marker in RATE_LIMIT_MARKERS)
+
+
+def is_transient_check_result(result: CheckResult | None) -> bool:
+    if not result:
+        return False
+    if result.status == "rate_limited":
+        return True
+    if result.status == "error":
+        return is_transient_error_text(result.error)
+    return False
 
 
 def should_retry_result(result: CheckResult | None) -> bool:
@@ -1677,6 +1726,9 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_binding_history_checked_at
                 ON binding_check_history (checked_at DESC);
 
+                CREATE INDEX IF NOT EXISTS idx_binding_history_model_checked_at
+                ON binding_check_history (binding_id, model_id, checked_at DESC);
+
                 CREATE INDEX IF NOT EXISTS idx_jobs_created_at
                 ON jobs (created_at DESC);
                 """
@@ -1719,6 +1771,7 @@ class Database:
         self.add_column_if_missing("stations", "detect_min_interval_ms", "INTEGER NOT NULL DEFAULT 800")
         self.add_column_if_missing("stations", "detect_cooldown_seconds", "INTEGER NOT NULL DEFAULT 60")
         self.migrate_legacy_credentials()
+        self.restore_transient_current_checks()
 
     def migrate_legacy_credentials(self) -> None:
         if not self.table_exists("credentials"):
@@ -2539,44 +2592,133 @@ class Database:
             },
         }
 
+    def write_current_check_row(
+        self,
+        conn: sqlite3.Connection,
+        binding_id: int,
+        model_id: str,
+        status: str,
+        available: bool,
+        latency_ms: int,
+        response_shape: str,
+        preview: str,
+        network_mode: str,
+        network_route: str,
+        proxy_url_masked: str,
+        error: str,
+        checked_at: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO binding_checks (
+                binding_id, model_id, status, available, latency_ms,
+                response_shape, preview, network_mode, network_route, proxy_url_masked, error, checked_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(binding_id, model_id)
+            DO UPDATE SET
+                status = excluded.status,
+                available = excluded.available,
+                latency_ms = excluded.latency_ms,
+                response_shape = excluded.response_shape,
+                preview = excluded.preview,
+                network_mode = excluded.network_mode,
+                network_route = excluded.network_route,
+                proxy_url_masked = excluded.proxy_url_masked,
+                error = excluded.error,
+                checked_at = excluded.checked_at
+            """,
+            (
+                binding_id,
+                model_id,
+                status,
+                1 if available else 0,
+                latency_ms,
+                response_shape,
+                preview,
+                network_mode,
+                network_route,
+                proxy_url_masked,
+                error,
+                checked_at,
+            ),
+        )
+
+    def restore_latest_successful_current_check(
+        self,
+        conn: sqlite3.Connection,
+        binding_id: int,
+        model_id: str,
+    ) -> bool:
+        row = conn.execute(
+            """
+            SELECT status, available, latency_ms, response_shape, preview,
+                   network_mode, network_route, proxy_url_masked, error, checked_at
+            FROM binding_check_history
+            WHERE binding_id = ? AND model_id = ? AND available = 1
+            ORDER BY checked_at DESC, id DESC
+            LIMIT 1
+            """,
+            (binding_id, model_id),
+        ).fetchone()
+        if not row:
+            return False
+        self.write_current_check_row(
+            conn,
+            binding_id,
+            model_id,
+            row["status"],
+            bool(row["available"]),
+            int(row["latency_ms"] or 0),
+            row["response_shape"] or "",
+            row["preview"] or "",
+            row["network_mode"] or "",
+            row["network_route"] or "",
+            row["proxy_url_masked"] or "",
+            row["error"] or "",
+            row["checked_at"],
+        )
+        return True
+
+    def should_replace_current_check(
+        self,
+        conn: sqlite3.Connection,
+        binding_id: int,
+        model_id: str,
+        result: CheckResult,
+    ) -> bool:
+        if not is_transient_check_result(result):
+            return True
+        return not self.restore_latest_successful_current_check(conn, binding_id, model_id)
+
+    def restore_transient_current_checks(self) -> None:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT binding_id, model_id, status, error
+                FROM binding_checks
+                WHERE available = 0 AND status IN ('error', 'rate_limited')
+                """
+            ).fetchall()
+            for row in rows:
+                result = CheckResult(
+                    row["status"],
+                    False,
+                    0,
+                    "",
+                    "",
+                    row["error"] or "",
+                )
+                if is_transient_check_result(result):
+                    self.restore_latest_successful_current_check(
+                        conn,
+                        row["binding_id"],
+                        row["model_id"],
+                    )
+
     def upsert_binding_check(self, binding_id: int, model_id: str, result: CheckResult) -> None:
         checked_at = utcnow()
         with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO binding_checks (
-                    binding_id, model_id, status, available, latency_ms,
-                    response_shape, preview, network_mode, network_route, proxy_url_masked, error, checked_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(binding_id, model_id)
-                DO UPDATE SET
-                    status = excluded.status,
-                    available = excluded.available,
-                    latency_ms = excluded.latency_ms,
-                    response_shape = excluded.response_shape,
-                    preview = excluded.preview,
-                    network_mode = excluded.network_mode,
-                    network_route = excluded.network_route,
-                    proxy_url_masked = excluded.proxy_url_masked,
-                    error = excluded.error,
-                    checked_at = excluded.checked_at
-                """,
-                (
-                    binding_id,
-                    model_id,
-                    result.status,
-                    1 if result.available else 0,
-                    result.latency_ms,
-                    result.response_shape,
-                    result.preview,
-                    result.network_mode,
-                    result.network_route,
-                    result.proxy_url_masked,
-                    result.error or "",
-                    checked_at,
-                ),
-            )
             conn.execute(
                 """
                 INSERT INTO binding_check_history (
@@ -2600,6 +2742,22 @@ class Database:
                     checked_at,
                 ),
             )
+            if self.should_replace_current_check(conn, binding_id, model_id, result):
+                self.write_current_check_row(
+                    conn,
+                    binding_id,
+                    model_id,
+                    result.status,
+                    result.available,
+                    result.latency_ms,
+                    result.response_shape,
+                    result.preview,
+                    result.network_mode,
+                    result.network_route,
+                    result.proxy_url_masked,
+                    result.error or "",
+                    checked_at,
+                )
             conn.execute(
                 "UPDATE protocol_bindings SET last_checked_at = ? WHERE id = ?",
                 (checked_at, binding_id),
@@ -3144,6 +3302,7 @@ class RelayManagerApp:
         key_record: sqlite3.Row,
         protocol: dict[str, Any],
     ) -> dict[str, Any]:
+        existing = self.db.find_binding_record(key_record["id"], protocol["adapter_type"])
         seed_models = parse_seed_models(key_record["seed_models"])
         adapter = self.build_adapter(protocol["adapter_type"], key_record)
         discovered_models: list[str] = []
@@ -3193,7 +3352,33 @@ class RelayManagerApp:
             else:
                 status = "listed"
 
-        existing = self.db.find_binding_record(key_record["id"], protocol["adapter_type"])
+        transient_detection_failure = (
+            not supported
+            and (
+                is_transient_check_result(probe_result)
+                or is_transient_error_text(list_error)
+            )
+        )
+        if existing and existing["supported"] and transient_detection_failure:
+            supported = True
+            status = existing["status"] if existing["status"] in {"ok", "supported", "listed", "rate_limited"} else "supported"
+            response_shape = response_shape or existing["response_shape"] or ""
+            preview = preview or existing["preview"] or ""
+            probe_model = probe_model or existing["probe_model"] or ""
+
+        preserve_existing_models = bool(
+            existing
+            and not list_models
+            and is_transient_error_text(list_error)
+            and int(existing["model_count"] or 0) > 0
+        )
+        model_count = int(existing["model_count"] or 0) if preserve_existing_models else len(list_models)
+        last_discovered_at = (
+            existing["last_discovered_at"]
+            if preserve_existing_models
+            else (utcnow() if list_models else "")
+        )
+
         binding = self.db.upsert_binding(
             key_record["id"],
             {
@@ -3201,7 +3386,7 @@ class RelayManagerApp:
                 "label": protocol["label"],
                 "status": status,
                 "supported": 1 if supported else 0,
-                "model_count": len(list_models),
+                "model_count": model_count,
                 "probe_model": probe_model,
                 "response_shape": response_shape,
                 "preview": preview,
@@ -3210,11 +3395,12 @@ class RelayManagerApp:
                 "last_proxy_url_masked": probe_result.proxy_url_masked if probe_result else adapter.network["proxy_url_masked"],
                 "last_error": last_error,
                 "detected_at": utcnow(),
-                "last_discovered_at": utcnow() if list_models else "",
+                "last_discovered_at": last_discovered_at,
                 "last_checked_at": existing["last_checked_at"] if existing else "",
             },
         )
-        self.db.replace_binding_models(binding["id"], list_models, source)
+        if not preserve_existing_models:
+            self.db.replace_binding_models(binding["id"], list_models, source)
         return {
             "key_id": key_record["id"],
             "key_name": key_record["name"],
@@ -3223,7 +3409,7 @@ class RelayManagerApp:
             "label": protocol["label"],
             "supported": supported,
             "status": status,
-            "model_count": len(list_models),
+            "model_count": model_count,
             "probe_model": probe_model,
             "network_mode": probe_result.network_mode if probe_result else adapter.network["effective_mode"],
             "network_route": probe_result.network_route if probe_result else "",
