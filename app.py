@@ -1606,8 +1606,8 @@ class Database:
                     proxy_url TEXT DEFAULT '',
                     notes TEXT DEFAULT '',
                     enabled INTEGER NOT NULL DEFAULT 1,
-                    detect_max_concurrency INTEGER NOT NULL DEFAULT 2,
-                    detect_min_interval_ms INTEGER NOT NULL DEFAULT 800,
+                    detect_max_concurrency INTEGER NOT NULL DEFAULT 1,
+                    detect_min_interval_ms INTEGER NOT NULL DEFAULT 1000,
                     detect_cooldown_seconds INTEGER NOT NULL DEFAULT 60,
                     created_at TEXT NOT NULL
                 );
@@ -1767,8 +1767,8 @@ class Database:
         self.add_column_if_missing("binding_models", "user_note", "TEXT DEFAULT ''")
         self.add_column_if_missing("binding_models", "first_seen_at", "TEXT DEFAULT ''")
         self.add_column_if_missing("binding_models", "last_seen_at", "TEXT DEFAULT ''")
-        self.add_column_if_missing("stations", "detect_max_concurrency", "INTEGER NOT NULL DEFAULT 2")
-        self.add_column_if_missing("stations", "detect_min_interval_ms", "INTEGER NOT NULL DEFAULT 800")
+        self.add_column_if_missing("stations", "detect_max_concurrency", "INTEGER NOT NULL DEFAULT 1")
+        self.add_column_if_missing("stations", "detect_min_interval_ms", "INTEGER NOT NULL DEFAULT 1000")
         self.add_column_if_missing("stations", "detect_cooldown_seconds", "INTEGER NOT NULL DEFAULT 60")
         self.migrate_legacy_credentials()
         self.restore_transient_current_checks()
@@ -1934,8 +1934,8 @@ class Database:
                     str(payload.get("proxy_url", "")).strip(),
                     payload.get("notes", "").strip(),
                     1 if as_bool(payload.get("enabled"), True) else 0,
-                    int(payload.get("detect_max_concurrency", 2)),
-                    int(payload.get("detect_min_interval_ms", 800)),
+                    int(payload.get("detect_max_concurrency", 1)),
+                    int(payload.get("detect_min_interval_ms", 1000)),
                     int(payload.get("detect_cooldown_seconds", 60)),
                     utcnow(),
                 ),
@@ -1958,8 +1958,8 @@ class Database:
                     str(payload.get("proxy_url", "")).strip(),
                     payload.get("notes", "").strip(),
                     1 if as_bool(payload.get("enabled"), True) else 0,
-                    int(payload.get("detect_max_concurrency", 2)),
-                    int(payload.get("detect_min_interval_ms", 800)),
+                    int(payload.get("detect_max_concurrency", 1)),
+                    int(payload.get("detect_min_interval_ms", 1000)),
                     int(payload.get("detect_cooldown_seconds", 60)),
                     station_id,
                 ),
@@ -3285,12 +3285,12 @@ class RelayManagerApp:
                 try:
                     station = self.db.get_station(station_id)
                     self._throttles[station_id] = StationThrottle(
-                        station.get("detect_max_concurrency", 2),
-                        station.get("detect_min_interval_ms", 800),
+                        station.get("detect_max_concurrency", 1),
+                        station.get("detect_min_interval_ms", 1000),
                         station.get("detect_cooldown_seconds", 60),
                     )
                 except KeyError:
-                    self._throttles[station_id] = StationThrottle(2, 800, 60)
+                    self._throttles[station_id] = StationThrottle(1, 1000, 60)
             return self._throttles[station_id]
 
     def invalidate_throttle(self, station_id: int) -> None:
@@ -4355,10 +4355,10 @@ class RelayRequestHandler(BaseHTTPRequestHandler):
             raise RelayError("proxy_url is required when station network_mode=proxy")
         if proxy_url and not proxy_url.startswith(("http://", "https://", "socks5://", "socks5h://")):
             raise RelayError("proxy_url must start with http://, https://, socks5:// or socks5h://")
-        concurrency = int(payload.get("detect_max_concurrency", 2))
+        concurrency = int(payload.get("detect_max_concurrency", 1))
         if not 1 <= concurrency <= 10:
             raise RelayError("detect_max_concurrency must be between 1 and 10")
-        interval = int(payload.get("detect_min_interval_ms", 800))
+        interval = int(payload.get("detect_min_interval_ms", 1000))
         if not 0 <= interval <= 30000:
             raise RelayError("detect_min_interval_ms must be between 0 and 30000")
         cooldown = int(payload.get("detect_cooldown_seconds", 60))

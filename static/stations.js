@@ -75,8 +75,8 @@ function resetStationForm() {
   stationForm.elements.id.value = "";
   stationForm.elements.network_mode.value = "auto";
   stationForm.elements.proxy_url.value = "";
-  stationForm.elements.detect_max_concurrency.value = 2;
-  stationForm.elements.detect_min_interval_ms.value = 800;
+  stationForm.elements.detect_max_concurrency.value = 1;
+  stationForm.elements.detect_min_interval_ms.value = 1000;
   stationForm.elements.detect_cooldown_seconds.value = 60;
   stationForm.elements.enabled.checked = true;
   setStationFeedback("");
@@ -330,7 +330,7 @@ function renderStationCard(station) {
   const metaParts = [
     `网络 ${escapeHtml(station.network_mode || "auto")}`,
     station.proxy_url_masked ? `代理 <code>${escapeHtml(station.proxy_url_masked)}</code>` : null,
-    `并发 ${station.detect_max_concurrency ?? 2} · 间隔 ${station.detect_min_interval_ms ?? 800}ms · 冷却 ${station.detect_cooldown_seconds ?? 60}s`,
+    `并发 ${station.detect_max_concurrency ?? 1} · 间隔 ${station.detect_min_interval_ms ?? 1000}ms · 冷却 ${station.detect_cooldown_seconds ?? 60}s`,
     station.notes ? escapeHtml(station.notes) : null,
   ].filter(Boolean);
 
@@ -474,8 +474,8 @@ function openEditStationModal(station) {
   stationForm.elements.base_url.value = station.base_url;
   stationForm.elements.network_mode.value = station.network_mode || "auto";
   stationForm.elements.proxy_url.value = station.proxy_url || "";
-  stationForm.elements.detect_max_concurrency.value = station.detect_max_concurrency ?? 2;
-  stationForm.elements.detect_min_interval_ms.value = station.detect_min_interval_ms ?? 800;
+  stationForm.elements.detect_max_concurrency.value = station.detect_max_concurrency ?? 1;
+  stationForm.elements.detect_min_interval_ms.value = station.detect_min_interval_ms ?? 1000;
   stationForm.elements.detect_cooldown_seconds.value = station.detect_cooldown_seconds ?? 60;
   stationForm.elements.notes.value = station.notes || "";
   stationForm.elements.enabled.checked = Boolean(station.enabled);
