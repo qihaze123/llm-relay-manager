@@ -11,19 +11,22 @@
       <aside class="sidebar">
         <a class="brand" href="/">LLM Relay Manager</a>
         <nav class="nav">
-          <a href="/" data-nav="dashboard">Dashboard</a>
-          <a href="/stations" data-nav="stations">Stations</a>
-          <a href="/keys" data-nav="keys">Keys</a>
-          <a href="/models" data-nav="models">Models</a>
-          <a href="/history" data-nav="history">History</a>
+          <a href="/" data-nav="dashboard">工作台</a>
+          <a href="/stations" data-nav="stations">站点</a>
+          <a href="/models" data-nav="models">模型</a>
+          <a href="/history" data-nav="history">记录</a>
         </nav>
       </aside>
       <main class="content">
+        <header class="page-titlebar">
+          <div>
+            <h1>站点</h1>
+          </div>
+        </header>
         <section class="panel">
           <div class="panel-toolbar">
             <div>
               <h2>站点总览</h2>
-              <p class="panel-note">展开某个站点后，可以直接查看、添加和操作它下面的 Key。</p>
             </div>
             <div class="filters-bar">
               <label>
@@ -35,18 +38,15 @@
                 <span>只看启用</span>
               </label>
               <button type="button" id="create-station-btn" class="button primary">新增站点</button>
-              <a href="/keys" class="button">高级 Key 运维</a>
             </div>
           </div>
           <div id="stations-list" class="station-canvas"></div>
         </section>
 
-        <section class="panel">
-          <div class="panel-head">
-            <h2>操作日志</h2>
-          </div>
+        <details class="panel collapsible-panel">
+          <summary class="disclosure-summary">操作日志</summary>
           <pre id="page-log" class="activity-log">等待操作...</pre>
-        </section>
+        </details>
       </main>
     </div>
 

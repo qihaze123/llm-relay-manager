@@ -3433,24 +3433,6 @@ class RelayManagerApp:
             throttle = self.get_throttle(station_id)
 
             def throttled_detect(key_rec: sqlite3.Row, proto: dict[str, Any]) -> dict[str, Any]:
-                if throttle.in_cooldown():
-                    return {
-                        "key_id": key_rec["id"],
-                        "key_name": key_rec["name"],
-                        "binding_id": None,
-                        "adapter_type": proto["adapter_type"],
-                        "label": proto["label"],
-                        "supported": False,
-                        "status": "rate_limited",
-                        "model_count": 0,
-                        "probe_model": "",
-                        "network_mode": "",
-                        "network_route": "",
-                        "proxy_url_masked": "",
-                        "response_shape": "",
-                        "preview": "",
-                        "error": "station in cooldown",
-                    }
                 throttle.acquire()
                 try:
                     result = self._detect_protocol_for_key(key_rec, proto)
@@ -3599,22 +3581,6 @@ class RelayManagerApp:
                     "network_route": "",
                     "proxy_url_masked": "",
                     "error": "model skipped by protocol profile",
-                }
-            if throttle.in_cooldown():
-                rl_result = CheckResult("rate_limited", False, 0, "", "", "station in cooldown")
-                self.db.upsert_binding_check(binding_id, current_model, rl_result)
-                return index, {
-                    "binding_id": binding_id,
-                    "model_id": current_model,
-                    "status": "rate_limited",
-                    "available": False,
-                    "latency_ms": 0,
-                    "response_shape": "",
-                    "preview": "",
-                    "network_mode": "",
-                    "network_route": "",
-                    "proxy_url_masked": "",
-                    "error": "station in cooldown",
                 }
             throttle.acquire()
             try:
@@ -3786,21 +3752,8 @@ class RelayManagerApp:
             bindings = [binding for binding in self.db.list_bindings() if binding["supported"]]
             if progress:
                 progress.add_total(sum(self.binding_check_target_count(binding["id"]) for binding in bindings))
-            skipped_cooldown = 0
             for binding in bindings:
                 if binding["supported"]:
-                    station_id = binding.get("station_id")
-                    if station_id:
-                        throttle = self.get_throttle(station_id)
-                        if throttle.in_cooldown():
-                            skipped_cooldown += 1
-                            target_count = self.binding_check_target_count(binding["id"])
-                            if progress:
-                                progress.step(
-                                    current_step=f"跳过 {binding.get('station_name', '')} (限流冷却中)",
-                                    increment=target_count,
-                                )
-                            continue
                     checked.extend(self.check_binding(binding["id"], progress=progress))
             self.db.update_scheduler_settings(
                 {

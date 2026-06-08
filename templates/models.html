@@ -11,14 +11,18 @@
       <aside class="sidebar">
         <a class="brand" href="/">LLM Relay Manager</a>
         <nav class="nav">
-          <a href="/" data-nav="dashboard">Dashboard</a>
-          <a href="/stations" data-nav="stations">Stations</a>
-          <a href="/keys" data-nav="keys">Keys</a>
-          <a href="/models" data-nav="models">Models</a>
-          <a href="/history" data-nav="history">History</a>
+          <a href="/" data-nav="dashboard">工作台</a>
+          <a href="/stations" data-nav="stations">站点</a>
+          <a href="/models" data-nav="models">模型</a>
+          <a href="/history" data-nav="history">记录</a>
         </nav>
       </aside>
       <main class="content">
+        <header class="page-titlebar">
+          <div>
+            <h1>模型</h1>
+          </div>
+        </header>
         <section class="panel models-panel">
           <form id="search-form" class="models-filters">
             <div class="filter-row primary">
@@ -33,34 +37,9 @@
                 </select>
               </label>
               <label>
-                <span>Key</span>
-                <select name="key_id" id="models-key-select">
-                  <option value="">全部 Key</option>
-                </select>
-              </label>
-              <label>
                 <span>协议</span>
                 <select name="protocol_label" id="models-protocol-select">
                   <option value="">全部协议</option>
-                </select>
-              </label>
-              <label>
-                <span>支持</span>
-                <select name="supported">
-                  <option value="">全部</option>
-                  <option value="1">支持</option>
-                  <option value="0">不支持</option>
-                </select>
-              </label>
-              <label>
-                <span>状态</span>
-                <select name="status">
-                  <option value="">全部</option>
-                  <option value="ok">ok</option>
-                  <option value="partial">partial</option>
-                  <option value="empty">empty</option>
-                  <option value="error">error</option>
-                  <option value="unchecked">unchecked</option>
                 </select>
               </label>
               <label>
@@ -70,14 +49,6 @@
                   <option value="1">可用</option>
                   <option value="0">不可用</option>
                   <option value="unchecked">未检查</option>
-                </select>
-              </label>
-              <label>
-                <span>模型启用</span>
-                <select name="enabled">
-                  <option value="">全部</option>
-                  <option value="1">已启用</option>
-                  <option value="0">已禁用</option>
                 </select>
               </label>
               <button type="button" id="reset-search-btn" class="button small ghost">重置</button>
@@ -93,6 +64,39 @@
               <details class="adv-filter-toggle">
                 <summary>高级筛选</summary>
                 <div class="filter-row secondary">
+                  <label>
+                    <span>Key</span>
+                    <select name="key_id" id="models-key-select">
+                      <option value="">全部 Key</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>支持</span>
+                    <select name="supported">
+                      <option value="">全部</option>
+                      <option value="1">支持</option>
+                      <option value="0">不支持</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>状态</span>
+                    <select name="status">
+                      <option value="">全部</option>
+                      <option value="ok">ok</option>
+                      <option value="partial">partial</option>
+                      <option value="empty">empty</option>
+                      <option value="error">error</option>
+                      <option value="unchecked">unchecked</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>模型启用</span>
+                    <select name="enabled">
+                      <option value="">全部</option>
+                      <option value="1">已启用</option>
+                      <option value="0">已禁用</option>
+                    </select>
+                  </label>
                   <label>
                     <span>成功率下限</span>
                     <input name="min_success_rate" type="number" min="0" max="100" step="0.1" placeholder="0-100">

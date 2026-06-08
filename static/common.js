@@ -91,11 +91,10 @@ window.RelayCommon = {
   activateNav() {
     const page = document.body.dataset.page;
     const hints = {
-      dashboard: "总览：运行状态、概要指标、快速入口",
-      stations: "站点：录入中转站，展开站点管理 Key",
-      keys: "Keys：跨站点全局视角，批量探测/强制校验",
-      models: "模型：按模型×站点×Key×协议 查询可用性",
-      history: "历史：后台调度设置与巡检历史",
+      dashboard: "工作台：看状态、处理问题、进入常用操作",
+      stations: "站点：管理中转站和它下面的 Key",
+      models: "模型：查询模型在不同站点和协议下是否可用",
+      history: "记录：后台任务、调度和巡检历史",
     };
     document.querySelectorAll("[data-nav]").forEach((node) => {
       const key = node.dataset.nav;

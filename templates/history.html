@@ -11,17 +11,21 @@
       <aside class="sidebar">
         <a class="brand" href="/">LLM Relay Manager</a>
         <nav class="nav">
-          <a href="/" data-nav="dashboard">Dashboard</a>
-          <a href="/stations" data-nav="stations">Stations</a>
-          <a href="/keys" data-nav="keys">Keys</a>
-          <a href="/models" data-nav="models">Models</a>
-          <a href="/history" data-nav="history">History</a>
+          <a href="/" data-nav="dashboard">工作台</a>
+          <a href="/stations" data-nav="stations">站点</a>
+          <a href="/models" data-nav="models">模型</a>
+          <a href="/history" data-nav="history">记录</a>
         </nav>
       </aside>
       <main class="content">
+        <header class="page-titlebar">
+          <div>
+            <h1>记录</h1>
+          </div>
+        </header>
         <section class="panel compact">
           <div class="panel-head">
-            <h2>调度设置</h2>
+            <h2>调度</h2>
             <form id="scheduler-form" class="inline-form">
               <label class="inline-check">
                 <input type="checkbox" name="enabled">
@@ -41,10 +45,7 @@
 
         <section class="panel">
           <div class="panel-head">
-            <div>
-              <h2>后台任务</h2>
-              <p>这里显示探测、审计、强制全量校验等长任务的进度和最终结果。</p>
-            </div>
+            <h2>后台任务</h2>
           </div>
           <div class="table-wrap">
             <table>
@@ -66,10 +67,7 @@
 
         <section class="panel">
           <div class="panel-head">
-            <div>
-              <h2>最近历史</h2>
-              <p>最近 100 条模型检查记录。</p>
-            </div>
+            <h2>检查记录</h2>
           </div>
           <div class="table-wrap">
             <table>

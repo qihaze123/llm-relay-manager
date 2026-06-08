@@ -199,6 +199,33 @@ function formatLatency(value) {
   return value ? `${value} ms` : "-";
 }
 
+function networkModeLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const labels = {
+    auto: "自动",
+    direct: "直连",
+    proxy: "代理",
+    inherit: "继承",
+    "": "继承",
+  };
+  return labels[normalized] || normalized || "-";
+}
+
+function keyNetworkTip(key) {
+  const keyMode = key.network_mode ? `${networkModeLabel(key.network_mode)} (${key.network_mode})` : "继承站点";
+  const stationMode = key.station_network_mode || "auto";
+  const effectiveMode = key.effective_network_mode || stationMode || "auto";
+  const lines = [
+    `当前网络：${networkModeLabel(effectiveMode)} (${effectiveMode})`,
+    `Key 设置：${keyMode}`,
+    `站点默认：${networkModeLabel(stationMode)} (${stationMode})`,
+    key.effective_proxy_url_masked ? `代理地址：${key.effective_proxy_url_masked}` : "代理地址：未配置",
+    `超时：${key.timeout_seconds || 30}s`,
+  ];
+  if (key.group_name) lines.push(`分组：${key.group_name}`);
+  return lines.join("\n");
+}
+
 function jobProgress(job) {
   const total = Number(job?.total_steps || 0);
   const completed = Number(job?.completed_steps || 0);
@@ -253,6 +280,7 @@ function renderKeyCard(key) {
   const protocolMarkup = rows.length
     ? rows.map(renderBindingPill).join("")
     : `<span class="chip">尚未产出协议结果</span>`;
+  const networkMode = key.effective_network_mode || key.station_network_mode || "auto";
   return `
     <article class="key-card">
       <div class="key-card-top">
@@ -260,13 +288,13 @@ function renderKeyCard(key) {
           <div class="key-card-title">
             <h4>${escapeHtml(key.name)}</h4>
             ${statusBadge(key.enabled ? "启用" : "停用", key.enabled ? "ok" : "neutral")}
+            <span class="network-mode-chip ${escapeHtml(networkMode)}" data-tip="${escapeHtml(keyNetworkTip(key))}">
+              网络 ${escapeHtml(networkModeLabel(networkMode))}
+            </span>
           </div>
           <p class="subline">
-            分组 ${escapeHtml(key.group_name || "-")} · 网络 ${escapeHtml(key.effective_network_mode || "-")}
-            ${key.effective_proxy_url_masked ? ` · <code>${escapeHtml(key.effective_proxy_url_masked)}</code>` : ""}
-          </p>
-          <p class="subline">
-            <code class="copyable-key" data-copy-text="${escapeHtml(key.api_key || key.api_key_masked || "")}" title="点击复制">${escapeHtml(key.api_key_masked || "-")}</code> · 协议 ${key.supported_binding_count || 0}/${key.binding_count || 0}
+            <code class="copyable-key" data-copy-text="${escapeHtml(key.api_key || key.api_key_masked || "")}" title="点击复制">${escapeHtml(key.api_key_masked || "-")}</code>
+            · 协议 ${key.supported_binding_count || 0}/${key.binding_count || 0}
             · 可用模型 ${key.available_model_count || 0}
           </p>
         </div>
@@ -307,8 +335,8 @@ function renderStationCard(station) {
   ].filter(Boolean);
 
   return `
-    <article class="station-card">
-      <div class="station-card-top">
+    <article class="station-card ${expanded ? "is-expanded" : ""}" data-station-id="${station.id}">
+      <div class="station-card-top" data-action="toggle-keys" data-station-id="${station.id}" role="button" tabindex="0" aria-expanded="${expanded ? "true" : "false"}">
         <div class="station-card-copy">
           <div class="station-card-header">
             <div class="station-card-title-row">
@@ -339,29 +367,17 @@ function renderStationCard(station) {
           </div>
         </div>
         <div class="station-card-actions">
-          <button type="button" class="button small${expanded ? " primary" : ""}" data-action="toggle-keys" data-station-id="${station.id}">
-            ${expanded ? "收起" : "Keys"}
-          </button>
           <button type="button" class="button small" data-action="create-key" data-station-id="${station.id}">+Key</button>
           <button type="button" class="button small" data-action="edit-station" data-station-id="${station.id}">编辑</button>
           <button type="button" class="button small danger" data-action="delete-station" data-station-id="${station.id}">删除</button>
         </div>
+        <span class="station-toggle-mark" aria-hidden="true"></span>
       </div>
 
       ${
         expanded
           ? `
             <div class="station-card-body">
-              <div class="section-intro">
-                <div>
-                  <h3>${escapeHtml(station.name)} 的 Keys</h3>
-                  <p>当前 ${stats.enabledKeyCount}/${stats.keyCount} 个 Key 处于启用状态。</p>
-                </div>
-                <div class="actions">
-                  <button type="button" class="button small" data-action="create-key" data-station-id="${station.id}">新增 Key</button>
-                  <a href="/models?station_id=${station.id}" class="button small">查看模型</a>
-                </div>
-              </div>
               ${keyMarkup}
             </div>
           `
@@ -393,6 +409,15 @@ function renderStations() {
   if (emptyCreateStationBtn) {
     emptyCreateStationBtn.addEventListener("click", openCreateStationModal);
   }
+}
+
+function toggleStationKeys(stationId) {
+  if (expandedStationIds.has(stationId)) {
+    expandedStationIds.delete(stationId);
+  } else {
+    expandedStationIds.add(stationId);
+  }
+  renderStations();
 }
 
 async function refreshAll() {
@@ -794,12 +819,7 @@ stationsList.addEventListener("click", async (event) => {
 
   try {
     if (action === "toggle-keys") {
-      if (expandedStationIds.has(stationId)) {
-        expandedStationIds.delete(stationId);
-      } else {
-        expandedStationIds.add(stationId);
-      }
-      renderStations();
+      toggleStationKeys(stationId);
       return;
     }
 
@@ -865,6 +885,14 @@ stationsList.addEventListener("click", async (event) => {
   } catch (error) {
     log(pageLog, error.message);
   }
+});
+
+stationsList.addEventListener("keydown", (event) => {
+  if (!["Enter", " "].includes(event.key)) return;
+  const toggleNode = event.target.closest(".station-card-top[data-action='toggle-keys']");
+  if (!toggleNode || event.target.closest("button, a, input, select, textarea")) return;
+  event.preventDefault();
+  toggleStationKeys(Number(toggleNode.dataset.stationId));
 });
 
 bindingDetailRefreshBtn.addEventListener("click", async () => {

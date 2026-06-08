@@ -11,35 +11,61 @@
       <aside class="sidebar">
         <a class="brand" href="/">LLM Relay Manager</a>
         <nav class="nav">
-          <a href="/" data-nav="dashboard">Dashboard</a>
-          <a href="/stations" data-nav="stations">Stations</a>
-          <a href="/keys" data-nav="keys">Keys</a>
-          <a href="/models" data-nav="models">Models</a>
-          <a href="/history" data-nav="history">History</a>
+          <a href="/" data-nav="dashboard">工作台</a>
+          <a href="/stations" data-nav="stations">站点</a>
+          <a href="/models" data-nav="models">模型</a>
+          <a href="/history" data-nav="history">记录</a>
         </nav>
       </aside>
       <main class="content">
-        <section class="dashboard-topbar">
-          <div class="stat-strip" id="summary-grid"></div>
-          <div class="dashboard-actions">
-            <button id="run-cycle-btn" class="button primary">跑完整探测周期</button>
-            <a class="button" href="/keys">去管理 Keys</a>
+        <header class="page-titlebar">
+          <div>
+            <h1>工作台</h1>
           </div>
-        </section>
+          <div class="page-head-actions">
+            <button id="run-cycle-btn" class="button primary">运行巡检</button>
+          </div>
+        </header>
 
-        <section class="panel compact">
+        <section class="panel workbench-status">
           <div class="panel-head">
-            <h2>调度状态</h2>
-            <div id="scheduler-status" class="scheduler-status inline"></div>
+            <h2>当前状态</h2>
+            <div id="health-badge"></div>
+          </div>
+          <div class="stat-strip" id="summary-grid"></div>
+          <div class="action-list action-list-inline">
+            <a class="action-item" href="/stations">
+              <strong>站点和 Key</strong>
+              <span>增删中转站、展开站点处理 Key</span>
+            </a>
+            <a class="action-item" href="/models?available=0">
+              <strong>不可用模型</strong>
+              <span>定位失败模型和错误原因</span>
+            </a>
+            <a class="action-item" href="/history">
+              <strong>记录</strong>
+              <span>查看调度、任务和检查历史</span>
+            </a>
           </div>
         </section>
 
         <section class="panel">
           <div class="panel-head">
-            <div>
-              <h2>最近历史</h2>
-              <p>最近 12 条模型检查记录。</p>
-            </div>
+            <h2>需要处理</h2>
+          </div>
+          <div id="issue-list" class="issue-list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>站点概览</h2>
+          </div>
+          <div id="station-overview" class="station-overview"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>最近检查</h2>
           </div>
           <div class="table-wrap">
             <table class="models-table">

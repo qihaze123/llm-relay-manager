@@ -121,6 +121,33 @@ function renderStationOptions(rows) {
   }
 }
 
+function networkModeLabel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  const labels = {
+    auto: "自动",
+    direct: "直连",
+    proxy: "代理",
+    inherit: "继承",
+    "": "继承",
+  };
+  return labels[normalized] || normalized || "-";
+}
+
+function keyNetworkTip(key) {
+  const keyMode = key.network_mode ? `${networkModeLabel(key.network_mode)} (${key.network_mode})` : "继承站点";
+  const stationMode = key.station_network_mode || "auto";
+  const effectiveMode = key.effective_network_mode || stationMode || "auto";
+  const lines = [
+    `当前网络：${networkModeLabel(effectiveMode)} (${effectiveMode})`,
+    `Key 设置：${keyMode}`,
+    `站点默认：${networkModeLabel(stationMode)} (${stationMode})`,
+    key.effective_proxy_url_masked ? `代理地址：${key.effective_proxy_url_masked}` : "代理地址：未配置",
+    `超时：${key.timeout_seconds || 30}s`,
+  ];
+  if (key.group_name) lines.push(`分组：${key.group_name}`);
+  return lines.join("\n");
+}
+
 function filteredKeys() {
   const query = keySearch.value.trim().toLowerCase();
   return keys.filter((row) => {
@@ -140,16 +167,30 @@ function renderKeys() {
   keysTable.innerHTML = rows.length
     ? rows
         .map(
-          (row) => `
+          (row) => {
+            const networkMode = row.effective_network_mode || row.station_network_mode || "auto";
+            return `
             <tr>
-              <td><span class="muted-id" title="ID ${row.id}">#${row.id}</span> ${escapeHtml(row.name)}</td>
+              <td>
+                <div class="cell-stack">
+                  <strong><span class="muted-id" title="ID ${row.id}">#${row.id}</span>${escapeHtml(row.name)}</strong>
+                  ${row.group_name ? `<span>${escapeHtml(row.group_name)}</span>` : ""}
+                </div>
+              </td>
               <td>${escapeHtml(row.station_name)}</td>
-              <td>${escapeHtml(row.group_name || "-")}</td>
               <td>${row.enabled ? '<span class="status-badge ok">启用</span>' : '<span class="status-badge neutral">停用</span>'}</td>
-              <td>${escapeHtml(row.effective_network_mode || "-")}${row.effective_proxy_url_masked ? ` · <code>${escapeHtml(row.effective_proxy_url_masked)}</code>` : ""}</td>
+              <td>
+                <span class="network-mode-chip ${escapeHtml(networkMode)}" data-tip="${escapeHtml(keyNetworkTip(row))}">
+                  ${escapeHtml(networkModeLabel(networkMode))}
+                </span>
+              </td>
               <td><code class="copyable-key" data-copy-text="${escapeHtml(row.api_key || row.api_key_masked || "")}" title="点击复制完整 Key">${escapeHtml(row.api_key_masked || "-")}</code></td>
-              <td>${row.supported_binding_count || 0}/${row.binding_count || 0}</td>
-              <td>${row.available_model_count || 0}</td>
+              <td>
+                <div class="cell-stack">
+                  <strong>${row.supported_binding_count || 0}/${row.binding_count || 0} 协议</strong>
+                  <span>${row.available_model_count || 0} 可用模型</span>
+                </div>
+              </td>
               <td class="actions compact-actions">
                 <button class="button small" data-entity="key" data-action="audit" data-id="${row.id}" data-tip="只跑该 Key 已支持的协议，做一轮模型发现 + 可用性检查">刷新</button>
                 <button class="button small ghost" data-entity="key" data-action="force-audit" data-id="${row.id}" data-tip="包括尚未支持的协议也重跑一遍，耗时较久">深度重测</button>
@@ -164,10 +205,11 @@ function renderKeys() {
                 </details>
               </td>
             </tr>
-          `
+          `;
+          }
         )
         .join("")
-    : `<tr><td colspan="9">暂无符合条件的 Key</td></tr>`;
+    : `<tr><td colspan="7">暂无符合条件的 Key</td></tr>`;
 }
 
 function renderBindings(rows) {
@@ -309,6 +351,25 @@ keyForm.addEventListener("submit", async (event) => {
 });
 
 keysTable.addEventListener("click", async (event) => {
+  const copyNode = event.target.closest(".copyable-key");
+  if (copyNode) {
+    const text = copyNode.dataset.copyText;
+    if (text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        const tip = document.createElement("span");
+        tip.className = "copy-toast";
+        tip.textContent = "已复制";
+        copyNode.style.position = "relative";
+        copyNode.appendChild(tip);
+        setTimeout(() => tip.remove(), 1200);
+      } catch {
+        log(pageLog, "复制失败，请手动复制。");
+      }
+    }
+    return;
+  }
+
   const target = event.target.closest("button[data-action]");
   if (!target) return;
   const action = target.dataset.action;

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LLM Relay Manager · Keys</title>
+    <title>LLM Relay Manager · Key 管理</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body data-page="keys">
@@ -11,19 +11,22 @@
       <aside class="sidebar">
         <a class="brand" href="/">LLM Relay Manager</a>
         <nav class="nav">
-          <a href="/" data-nav="dashboard">Dashboard</a>
-          <a href="/stations" data-nav="stations">Stations</a>
-          <a href="/keys" data-nav="keys">Keys</a>
-          <a href="/models" data-nav="models">Models</a>
-          <a href="/history" data-nav="history">History</a>
+          <a href="/" data-nav="dashboard">工作台</a>
+          <a href="/stations" data-nav="stations">站点</a>
+          <a href="/models" data-nav="models">模型</a>
+          <a href="/history" data-nav="history">记录</a>
         </nav>
       </aside>
       <main class="content">
+        <header class="page-titlebar">
+          <div>
+            <h1>Key 管理</h1>
+          </div>
+        </header>
         <section class="panel">
           <div class="panel-toolbar">
             <div>
               <h2>Key 列表</h2>
-              <p class="panel-note">新增 Key 默认会直接进入后台全量校验。这里保留全局视角，便于跨站点运维。</p>
             </div>
             <div class="filters-bar">
               <label>
@@ -55,12 +58,10 @@
                 <tr>
                   <th>名称</th>
                   <th>站点</th>
-                  <th>分组</th>
                   <th>状态</th>
                   <th>网络</th>
                   <th>Key</th>
-                  <th>协议</th>
-                  <th>可用模型</th>
+                  <th>结果</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -69,13 +70,11 @@
           </div>
         </section>
 
-        <section class="panel">
-          <div class="panel-head">
-            <div>
-              <h2>协议探测结果</h2>
-              <p>每一行代表一个 Key 在某种协议下的探测结果，以及该协议列出的模型数量。</p>
-            </div>
-          </div>
+        <details class="panel collapsible-panel">
+          <summary class="disclosure-summary">
+            <h2>协议明细</h2>
+            <span>展开</span>
+          </summary>
           <div class="table-wrap">
             <table>
               <thead>
@@ -98,14 +97,12 @@
               <tbody id="bindings-table"></tbody>
             </table>
           </div>
-        </section>
+        </details>
 
-        <section class="panel">
-          <div class="panel-head">
-            <h2>操作日志</h2>
-          </div>
+        <details class="panel collapsible-panel">
+          <summary class="disclosure-summary">操作日志</summary>
           <pre id="page-log" class="activity-log">等待操作...</pre>
-        </section>
+        </details>
       </main>
     </div>
 
